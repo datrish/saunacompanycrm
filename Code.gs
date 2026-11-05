@@ -187,12 +187,12 @@ function setup() {
   }
   const { map } = headerMap_(sh);
   const last = Math.max(sh.getLastRow(), 2);
-  // 2. status labels
-  const st = sh.getRange(2, map.status + 1, last - 1, 1);
-  st.setValues(st.getValues().map(([v]) => [OLD_STATUS[v] || v]));
-  // 3. drop-down
+  // 2. drop-down first (the old one would reject the new labels)
   const dv = SpreadsheetApp.newDataValidation().requireValueInList(STATUSES, true).setAllowInvalid(false).build();
   sh.getRange(2, map.status + 1, sh.getMaxRows() - 1, 1).setDataValidation(dv);
+  // 3. status labels
+  const st = sh.getRange(2, map.status + 1, last - 1, 1);
+  st.setValues(st.getValues().map(([v]) => [OLD_STATUS[v] || v]));
   sh.getRange(2, map.chases + 1, last - 1, 1).setValues(
     sh.getRange(2, map.chases + 1, last - 1, 1).getValues().map(([v]) => [v === '' ? 0 : v]));
   // 4. row colours by status
