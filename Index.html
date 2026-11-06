@@ -436,11 +436,14 @@ function payStatus(p) {
   return { k: 'none', label: 'Not invoiced' };
 }
 function defaultStages(l) {
-  const q = l.quote || 0; const half = Math.round(q / 2);
-  return [
-    { stage: 'Deposit 50% (on order)', amount: half, invRef: '', invSent: '', due: '', paid: '' },
-    { stage: 'Balance 50% (7 days before installation)', amount: q - half, invRef: '', invSent: '', due: '', paid: '' },
-  ];
+  const q = l.quote || 0;
+  const plan = [['Advance 25% (on order)', 0.25], ['40% – frame completed', 0.40], ['30% – after cladding', 0.30], ['Final 5% (handover)', 0.05]];
+  let left = q;
+  return plan.map(([stage, pct], i) => {
+    const amount = i === plan.length - 1 ? left : Math.round(q * pct);
+    left -= amount;
+    return { stage, amount, invRef: '', invSent: '', due: '', paid: '' };
+  });
 }
 function renderPayments() {
   const t = todayISO(); const in30 = addDays(t, 30); const monthStart = t.slice(0, 8) + '01';
@@ -474,7 +477,7 @@ function paymentsBlock(l, ask) {
   const store = (arr, action) => save(l.id, { payments: arr }, action || { type: 'edit', field: 'payments' });
   if (!pays.length) {
     return h('div', { class: 'pay' }, h('h3', {}, 'Payments'),
-      h('div', { class: 'quick' }, h('button', { class: 'btn primary', type: 'button', disabled: dis, onclick: () => ask('payment stages 50% / 50%' + (l.quote ? ' of ' + gbp(l.quote) : ''), () => store(defaultStages(l))) }, 'Set up payment stages'),
+      h('div', { class: 'quick' }, h('button', { class: 'btn primary', type: 'button', disabled: dis, onclick: () => ask('payment stages 25% / 40% / 30% / 5%' + (l.quote ? ' of ' + gbp(l.quote) : ''), () => store(defaultStages(l))) }, 'Set up payment stages'),
         l.quote ? null : h('span', { class: 'note' }, 'Fill in Quote £ first so the amounts calculate.')));
   }
   const upd = (i, key, val) => { const arr = pays.map((p) => Object.assign({}, p)); arr[i][key] = val; store(arr); };
