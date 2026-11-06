@@ -16,11 +16,11 @@ const FIELDS = {
   postcode: 'Postcode', enquiry: 'Enquiry', status: 'Status', quote: 'Quote £ (ex VAT)',
   priority: 'Priority', owner: 'Owner', lastContact: 'Last contact', nextFollowUp: 'Next follow-up',
   lostReason: 'Lost reason', notes: 'Notes', chases: 'Chases', lastChased: 'Last chased',
-  wixId: 'Wix ID', lastActivity: 'Last activity', history: 'History', drawingSent: 'Drawing sent'
+  wixId: 'Wix ID', lastActivity: 'Last activity', history: 'History', drawingSent: 'Drawing sent', payments: 'Payments'
 };
 const DATE_FIELDS = ['date', 'lastContact', 'nextFollowUp', 'lastChased', 'drawingSent'];
 const EDITABLE = ['name', 'email', 'phone', 'postcode', 'enquiry', 'source', 'status', 'quote', 'priority', 'owner',
-  'nextFollowUp', 'lostReason', 'notes', 'chases', 'lastChased', 'lastContact', 'drawingSent'];
+  'nextFollowUp', 'lostReason', 'notes', 'chases', 'lastChased', 'lastContact', 'drawingSent', 'payments'];
 const STATUSES = ['New', 'Phoned - no answer', 'Replied - no quote', 'Quote sent', 'Chased', 'Won', 'Lost'];
 const OLD_STATUS = { 'Not contacted': 'New', 'Contacted - no quote': 'Replied - no quote' };
 const STATUS_COLOURS = {
@@ -64,7 +64,7 @@ function rowToLead_(row, map) {
     if (DATE_FIELDS.includes(k)) v = fmtDate_(v);
     else if (k === 'quote') v = (v === '' || v == null) ? null : Number(String(v).replace(/[£,\s]/g, '')) || null;
     else if (k === 'chases') v = Number(v) || 0;
-    else if (k === 'history') { try { v = v ? JSON.parse(v) : []; } catch (e) { v = []; } }
+    else if (k === 'history' || k === 'payments') { try { v = v ? JSON.parse(v) : []; } catch (e) { v = []; } }
     else if (k === 'lastActivity') v = v instanceof Date ? v.toISOString() : String(v || '');
     else v = v == null ? '' : String(v);
     l[k] = v;
@@ -94,6 +94,7 @@ function findRow_(sh, map, id) {
 }
 
 function writeValue_(k, v) {
+  if (k === 'payments') return JSON.stringify(Array.isArray(v) ? v : []);
   if (v == null) return '';
   if (k === 'quote') return v === '' ? '' : Number(v);
   if (k === 'chases') return Number(v) || 0;
