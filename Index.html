@@ -149,6 +149,7 @@ body { margin: 0; }
 .ps.paid { background: var(--s-won-bg); } .ps.inv { background: var(--s-quote-bg); } .ps.over { background: var(--s-new-bg); color: var(--s-new); font-weight: 600; } .ps.none { background: var(--soft); color: var(--muted); }
 .paystrip { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); gap: 8px; }
 .paystrip .stat { cursor: default; }
+.lostpick { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; } .lostpick .chip { border: 1px solid var(--line, #d9d4cc); background: var(--card, #fff); border-radius: 999px; padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer; } .lostpick .chip.on { background: var(--ink); color: var(--card, #fff); border-color: var(--ink); } .lostpick > * { flex: 0 0 auto; } .lostpick > .note, .lostmore { flex: 1 1 100% !important; } .lostmore { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 13px; } .lostmore > .note { flex: 1 1 100%; } .lostmore input[type=text] { flex: 1 1 260px; min-width: 200px; } .bar { display: inline-block; height: 8px; border-radius: 4px; background: var(--s-new); vertical-align: middle; }
 .subh { font-size: 14px; margin: 18px 0 6px; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; } .subh .note { font-weight: 400; }
 .late { color: var(--s-new); font-weight: 600; }
 .paysum { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
@@ -243,6 +244,8 @@ table.team tr.total td { font-weight: 700; border-bottom: 0; }
     </div>
     <div class="tablewrap"><table class="team" id="team"></table></div>
     <p class="note">Counts every button tapped on the board, and who tapped it. Work done before the board started (5 Nov 2026) isn't counted.</p>
+    <h3 class="subh">Why we lose <span class="note">leads marked Lost in the period above</span></h3>
+    <div class="tablewrap"><table class="team" id="lostwhy"></table></div>
   </section>
 
   <section class="card" style="padding:16px 16px 18px">
@@ -298,7 +301,19 @@ const STATUSES = [
 const SBY = Object.fromEntries(STATUSES.map((s) => [s.k, s]));
 const OPEN = new Set(['New', 'Phoned - no answer', 'Replied - no quote', 'Quote sent', 'Chased']);
 const OWNERS = ['', 'Kiana', 'Hemant', 'Deepti'];
-const LOST = ['', 'Price too high', 'Chose competitor', 'Postponed', 'Budget', 'No response', 'Out of area', 'Other'];
+const LOST_REASONS = [
+  { k: 'Quote too high', hint: 'Liked us, but the price was more than they wanted to pay' },
+  { k: 'Not going ahead', hint: 'Project cancelled, no budget, house sale, changed their mind' },
+  { k: 'Postponed', hint: 'Maybe later. Set a date to get back in touch' },
+  { k: 'Went with someone else', hint: 'Another sauna company, their builder, or a kit. Note who and why' },
+  { k: 'We were too slow', hint: 'Late reply, late drawing, late quote or late chase' },
+  { k: 'No response', hint: 'Went silent after 3 chases' },
+  { k: 'Not a fit', hint: 'Out of area, too small, or not something we do' },
+  { k: 'Other', hint: 'Write the reason' },
+];
+const LOST = ['', ...LOST_REASONS.map((r) => r.k)];
+const LOST_OLD = { 'Price too high': 'Quote too high', 'Chose competitor': 'Went with someone else', 'Budget': 'Not going ahead', 'Out of area': 'Not a fit' };
+const lostKey = (v) => LOST_OLD[v] || v || '';
 const PRI = { High: 0, Medium: 1, Low: 2 };
 const gbp = (v) => (v ? '£' + Math.round(v).toLocaleString('en-GB') : '');
 const gbpShort = (v) => (v >= 10000 ? '£' + (v / 1000).toLocaleString('en-GB', { maximumFractionDigits: 0 }) + 'k' : gbp(v) || '£0');
@@ -354,11 +369,11 @@ function save(id, patch, action) {
   });
   return queues[id];
 }
-function setStatus(l, to, extra) {
+function setStatus(l, to, extra, more) {
   if (l.status === to && !extra) return;
   const patch = Object.assign({ status: to }, extra || {});
   if (to === 'Won' && !(Array.isArray(l.payments) && l.payments.length)) patch.payments = defaultStages(Object.assign({}, l, patch));
-  return save(l.id, patch, { type: 'status', from: l.status, to });
+  return save(l.id, patch, Object.assign({ type: 'status', from: l.status, to }, more || {}));
 }
 function chase(l) {
   const t = todayISO();
@@ -444,6 +459,7 @@ function dueList() {
   const t = todayISO();
   const items = [];
   for (const l of leads) {
+    if (l.status === 'Lost' && lostKey(l.lostReason) === 'Postponed' && l.nextFollowUp && l.nextFollowUp <= t) { items.push({ l, why: 'Postponed: time to get back in touch', when: l.nextFollowUp, late: l.nextFollowUp < t, rank: 0 }); continue; }
     if (!OPEN.has(l.status)) continue;
     if (l.nextFollowUp && l.nextFollowUp <= t) { items.push({ l, why: 'Follow-up due', when: l.nextFollowUp, late: l.nextFollowUp < t, rank: 0 }); continue; }
     const last = dayOf(l.lastActivity) || l.date;
@@ -451,6 +467,47 @@ function dueList() {
     if ((l.status === 'New' || l.status === 'Phoned - no answer') && l.date && l.date >= addDays(t, -14) && l.date <= addDays(t, -1)) items.push({ l, why: l.status === 'New' ? 'Waiting for a reply' : 'Phoned only: send an email', when: l.date, late: true, rank: 2 });
   }
   return items.sort((a, b) => a.rank - b.rank || (PRI[a.l.priority] ?? 3) - (PRI[b.l.priority] ?? 3) || String(a.when).localeCompare(String(b.when)));
+}
+
+/* ---------- lost reasons ---------- */
+function lostReady(c) { return !!c.reason && (c.reason !== 'Other' || c.detail.trim()) && (c.reason !== 'Postponed' || c.revisit); }
+function lostPicker(c) {
+  const pick = (k) => () => { c.reason = k; renderList(); };
+  const hint = (LOST_REASONS.find((r) => r.k === c.reason) || {}).hint;
+  return h('div', { class: 'lostpick' },
+    h('span', { class: 'note', style: 'width:100%' }, 'Why was it lost? Pick one:'),
+    ...LOST_REASONS.map((r) => h('button', { type: 'button', class: 'chip' + (c.reason === r.k ? ' on' : ''), title: r.hint, onclick: pick(r.k) }, r.k)),
+    c.reason ? h('div', { class: 'lostmore' },
+      hint ? h('span', { class: 'note', style: 'width:100%' }, hint) : null,
+      c.reason === 'Postponed' ? h('label', { class: 'cdate' }, 'Get back in touch on ', h('input', { type: 'date', value: c.revisit, min: todayISO(), onchange: (e) => { c.revisit = e.target.value; renderList(); } })) : null,
+      h('input', { type: 'text', placeholder: c.reason === 'Other' ? 'Reason (required)' : c.reason === 'Went with someone else' ? 'Who, and why? (optional)' : 'Detail (optional)', value: c.detail, oninput: (e) => { c.detail = e.target.value; const b = e.target.closest('.confirm').querySelector('.btn.primary'); if (b) b.disabled = !lostReady(c); } })) : null);
+}
+function renderLostWhy() {
+  const [from, to] = periodRange(document.getElementById('period').value);
+  const rows = {};
+  let missing = 0;
+  for (const l of leads) {
+    if (l.status !== 'Lost') continue;
+    const ev = (l.history || []).filter((e) => e.type === 'status' && e.to === 'Lost').pop();
+    const day = ev ? dayOf(ev.at) : '';
+    if (!day || day < from || day > to) continue;
+    const k = lostKey(l.lostReason);
+    if (!k) { missing++; continue; }
+    const r = rows[k] = rows[k] || { n: 0, v: 0, names: [] };
+    r.n++; r.v += l.quote || 0; r.names.push(l.name || l.id);
+  }
+  const keys = Object.keys(rows).sort((a, b) => rows[b].n - rows[a].n || rows[b].v - rows[a].v);
+  const total = keys.reduce((a, k) => a + rows[k].n, 0) + missing;
+  const el = document.getElementById('lostwhy');
+  if (!total) { el.replaceChildren(h('tbody', {}, h('tr', {}, h('td', { class: 'empty' }, 'No leads marked Lost in this period.')))); return; }
+  const max = Math.max(1, ...keys.map((k) => rows[k].n));
+  el.replaceChildren(
+    h('thead', {}, h('tr', {}, ...['Reason', 'Leads', 'Share', '£ quoted', 'Who'].map((x) => h('th', {}, x)))),
+    h('tbody', {},
+      ...keys.map((k) => h('tr', {}, h('td', {}, k), h('td', {}, String(rows[k].n)),
+        h('td', {}, h('span', { class: 'bar', style: `width:${Math.round((rows[k].n / max) * 80)}px` }), ' ', Math.round((rows[k].n / total) * 100) + '%'),
+        h('td', {}, gbp(rows[k].v) || '–'), h('td', { style: 'text-align:left' }, rows[k].names.slice(0, 4).join(', ') + (rows[k].names.length > 4 ? ` +${rows[k].names.length - 4}` : '')))),
+      missing ? h('tr', {}, h('td', { class: 'late' }, 'No reason given'), h('td', {}, String(missing)), h('td', {}, Math.round((missing / total) * 100) + '%'), h('td', {}, ''), h('td', { style: 'text-align:left' }, 'Open these and add a reason')) : null));
 }
 
 /* ---------- payments ---------- */
@@ -587,7 +644,7 @@ function paymentsBlock(l, ask) {
 /* ---------- render ---------- */
 function render() {
   if (!loaded) return;
-  renderToday(); renderStrip(); renderChart(); renderPayments(); renderTeam(); renderDue(); renderList();
+  renderToday(); renderStrip(); renderChart(); renderPayments(); renderTeam(); renderLostWhy(); renderDue(); renderList();
   document.getElementById('add-btn').disabled = !canWrite;
 }
 
@@ -739,13 +796,18 @@ function editor(l) {
     h('dt', {}, 'Enquiry'), h('dd', {}, l.enquiry || ''),
     h('dt', {}, 'Drawing sent'), h('dd', {}, drawingCount(l) ? `${drawingCount(l)} time${drawingCount(l) > 1 ? 's' : ''}, last ${prettyDate(l.drawingSent)}${drawingCount(l) > 1 ? ' (rev ' + drawingCount(l) + ')' : ''}` : (l.drawingSent ? prettyDate(l.drawingSent) : '–')),
     h('dt', {}, 'Chases'), h('dd', { class: 'num' }, String(l.chases || 0) + (l.lastChased ? ` (last ${prettyDate(l.lastChased)})` : '')));
-  const ask = (label, fn, opt) => { ui.confirm = { id: l.id, label, fn, dated: !!(opt && opt.date), date: todayISO() }; renderList(); };
+  const ask = (label, fn, opt) => { ui.confirm = { id: l.id, label, fn, dated: !!(opt && opt.date), date: todayISO(), lost: !!(opt && opt.lost), reason: '', detail: '', revisit: addDays(todayISO(), 90) }; renderList(); };
+  const askLost = () => ask('Lost', (d, c) => {
+    const stamp = `Lost (${prettyDate(todayISO())}): ${c.reason}${c.detail ? ' – ' + c.detail : ''}`;
+    return setStatus(l, 'Lost', { nextFollowUp: c.reason === 'Postponed' ? c.revisit : '', lostReason: c.reason, notes: l.notes ? l.notes + '\n' + stamp : stamp }, { reason: c.reason, detail: c.detail });
+  }, { lost: true });
   const quickBtn = (txt, fn, primary) => h('button', { class: 'btn' + (primary ? ' primary' : ''), type: 'button', disabled: dis, onclick: () => ask(txt, fn) }, txt);
   const pending = ui.confirm && ui.confirm.id === l.id ? ui.confirm : null;
   const confirmBar = pending ? h('div', { class: 'confirm', role: 'alertdialog', 'aria-label': 'Confirm' },
     h('span', {}, 'Log ', h('b', {}, pending.label), ' for ', h('b', {}, l.name || l.id), '?'),
     pending.dated ? h('label', { class: 'cdate' }, 'Date ', h('input', { type: 'date', value: pending.date, max: todayISO(), onchange: (e) => { pending.date = e.target.value || todayISO(); } })) : null,
-    h('button', { class: 'btn primary', type: 'button', onclick: () => { const f = pending.fn, d = pending.date || todayISO(); ui.confirm = null; f(d); } }, 'Confirm'),
+    pending.lost ? lostPicker(pending) : null,
+    h('button', { class: 'btn primary', type: 'button', disabled: pending.lost && !lostReady(pending), onclick: () => { const f = pending.fn, d = pending.date || todayISO(), c = pending; ui.confirm = null; f(d, c); } }, 'Confirm'),
     h('button', { class: 'btn', type: 'button', onclick: () => { ui.confirm = null; renderList(); } }, 'Cancel')) : null;
   const form = h('div', { class: 'form' },
     confirmBar,
@@ -758,15 +820,15 @@ function editor(l) {
       quickBtn('Quote sent', () => setStatus(l, 'Quote sent', { nextFollowUp: l.nextFollowUp || addDays(todayISO(), 3) }), true),
       quickBtn('Chased today', () => chase(l)),
       quickBtn('Won', () => setStatus(l, 'Won', { nextFollowUp: '' })),
-      quickBtn('Lost', () => setStatus(l, 'Lost', { nextFollowUp: '' }))),
-    field('Status', sel(STATUSES, l.status, (e) => { const to = e.target.value; ask('status: ' + ((SBY[to] || {}).label || to), () => setStatus(l, to)); }, 'Status')),
+      h('button', { class: 'btn', type: 'button', disabled: dis, onclick: askLost }, 'Lost')),
+    field('Status', sel(STATUSES, l.status, (e) => { const to = e.target.value; if (to === 'Lost') return askLost(); ask('status: ' + ((SBY[to] || {}).label || to), () => setStatus(l, to)); }, 'Status')),
     field('Owner', sel(OWNERS, l.owner, (e) => save(l.id, { owner: e.target.value }, { type: 'edit', field: 'owner' }), 'Owner')),
     field('Quote £ (ex VAT)', h('input', { type: 'number', min: '0', step: '1', inputmode: 'numeric', value: l.quote || '', disabled: dis, onchange: blurSave('quote', (v) => (v === '' ? null : Number(v))) })),
     field('Next follow-up', h('input', { type: 'date', value: l.nextFollowUp || '', disabled: dis, onchange: blurSave('nextFollowUp') })),
     field('Priority', sel(['High', 'Medium', 'Low'], l.priority, (e) => save(l.id, { priority: e.target.value }, { type: 'edit', field: 'priority' }), 'Priority')),
-    l.status === 'Lost' ? field('Lost reason', sel(LOST, l.lostReason, (e) => save(l.id, { lostReason: e.target.value }, { type: 'edit', field: 'lostReason' }), 'Lost reason')) : h('span'),
+    l.status === 'Lost' ? field('Lost reason', sel(LOST.includes(lostKey(l.lostReason)) ? LOST : LOST.concat([l.lostReason]), lostKey(l.lostReason), (e) => save(l.id, { lostReason: e.target.value }, { type: 'edit', field: 'lostReason' }), 'Lost reason')) : h('span'),
     field('Notes', h('textarea', { disabled: dis, onchange: blurSave('notes') }, l.notes || ''), true),
-    h('ul', { class: 'hist' }, ...(l.history || []).slice().reverse().slice(0, 12).map((e) => h('li', {}, `${new Date(e.at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}${e.by ? ' (' + String(e.by).split('@')[0] + ')' : ''}: ${e.type === 'call' ? (e.outcome === 'no answer' ? 'Called, no answer' : 'Called, spoke') : e.type === 'email' ? 'Emailed' : e.type === 'drawing' ? ((e.rev || 1) > 1 ? 'Revised drawing sent (rev ' + e.rev + ')' : 'Drawing sent') : e.type === 'visit' ? 'Site visit done' : e.type === 'paychase' ? 'Payment chased: ' + (e.stage || '') : e.type === 'invoice' ? 'Invoice sent: ' + (e.stage || '') + (e.date ? ' (dated ' + prettyDate(e.date) + ')' : '') : e.type === 'paid' ? 'Payment received: ' + (e.stage || '') + (e.date ? ' (on ' + prettyDate(e.date) + ')' : '') : e.type === 'chase' ? 'Chased' : e.type === 'status' ? `${(SBY[e.from] || {}).label || e.from || '-'} → ${(SBY[e.to] || {}).label || e.to}` : e.type === 'created' ? 'Lead added' : e.type === 'import' ? 'Imported from the lead review' : e.type === 'wix' ? 'Website form' : 'Edited ' + (e.field || '')}`))));
+    h('ul', { class: 'hist' }, ...(l.history || []).slice().reverse().slice(0, 12).map((e) => h('li', {}, `${new Date(e.at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}${e.by ? ' (' + String(e.by).split('@')[0] + ')' : ''}: ${e.type === 'call' ? (e.outcome === 'no answer' ? 'Called, no answer' : 'Called, spoke') : e.type === 'email' ? 'Emailed' : e.type === 'drawing' ? ((e.rev || 1) > 1 ? 'Revised drawing sent (rev ' + e.rev + ')' : 'Drawing sent') : e.type === 'visit' ? 'Site visit done' : e.type === 'paychase' ? 'Payment chased: ' + (e.stage || '') : e.type === 'invoice' ? 'Invoice sent: ' + (e.stage || '') + (e.date ? ' (dated ' + prettyDate(e.date) + ')' : '') : e.type === 'paid' ? 'Payment received: ' + (e.stage || '') + (e.date ? ' (on ' + prettyDate(e.date) + ')' : '') : e.type === 'chase' ? 'Chased' : e.type === 'status' ? `${(SBY[e.from] || {}).label || e.from || '-'} → ${(SBY[e.to] || {}).label || e.to}${e.reason ? ' (' + e.reason + (e.detail ? ': ' + e.detail : '') + ')' : ''}` : e.type === 'created' ? 'Lead added' : e.type === 'import' ? 'Imported from the lead review' : e.type === 'wix' ? 'Website form' : 'Edited ' + (e.field || '')}`))));
   const showPay = l.status === 'Won' || (Array.isArray(l.payments) && l.payments.length);
   return h('div', { class: 'edit' }, facts, form, showPay ? paymentsBlock(l, ask) : null);
 }
@@ -799,9 +861,9 @@ document.getElementById('period').addEventListener('change', (e) => {
   const di = document.getElementById('period-date');
   di.hidden = e.target.value !== 'date';
   if (!di.hidden && !di.value) di.value = todayISO();
-  if (loaded) renderTeam();
+  if (loaded) { renderTeam(); renderLostWhy(); }
 });
-document.getElementById('period-date').addEventListener('change', () => loaded && renderTeam());
+document.getElementById('period-date').addEventListener('change', () => loaded && (renderTeam(), renderLostWhy()));
 document.getElementById('sort').addEventListener('change', (e) => { ui.sort = e.target.value; renderList(); });
 let rz; window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => loaded && renderChart(), 150); });
 

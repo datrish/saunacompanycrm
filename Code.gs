@@ -276,6 +276,8 @@ function buildReport_(from, to, title) {
   } else {
     html += '<p style="padding:10px;background:#fbe4e1;border-radius:6px"><b>Nothing was logged on the board in this period.</b></p>';
   }
+  const lostWhy = {}; items.filter((it) => it.k === 'lost').forEach((it) => { const r = it.e.reason || it.l.lostReason || 'No reason given'; lostWhy[r] = (lostWhy[r] || 0) + 1; });
+  if (Object.keys(lostWhy).length) html += '<p><b>Why we lost:</b> ' + Object.keys(lostWhy).sort((a, b) => lostWhy[b] - lostWhy[a]).map((r) => esc_(r) + ' ' + lostWhy[r]).join(' · ') + '</p>';
   html += '<p style="margin-top:16px"><b>Still waiting:</b> ' + notContacted.length + ' new leads not contacted yet · ' + dueTomorrow.length + ' follow-ups due by tomorrow.</p>';
   if (items.length) {
     items.sort((a, b) => String(a.at).localeCompare(String(b.at)));
@@ -287,6 +289,7 @@ function buildReport_(from, to, title) {
       if (it.k === 'drawing' && (it.e.rev || 1) > 1) what += ' (rev ' + it.e.rev + ')';
       if ((it.k === 'quote' || it.k === 'won') && it.l.quote) what += ' ' + gbp_(it.l.quote);
       if ((it.k === 'invoice' || it.k === 'paid' || it.k === 'paychase') && (it.e.stage || it.e.amount)) what += ': ' + esc_(it.e.stage || '') + ' ' + gbp_(it.e.amount);
+      if (it.k === 'lost') what += ' – ' + esc_(it.e.reason || it.l.lostReason || 'no reason given') + (it.e.detail ? ': ' + esc_(it.e.detail) : '');
       html += '<tr><td style="padding:4px 8px;color:#5f676e;white-space:nowrap">' + t + '</td><td style="padding:4px 8px">' + esc_(it.w) + '</td><td style="padding:4px 8px"><b>' + what + '</b></td><td style="padding:4px 8px">' + esc_(it.l.id + ' ' + (it.l.name || '')) + '</td></tr>';
     });
     html += '</table>';
