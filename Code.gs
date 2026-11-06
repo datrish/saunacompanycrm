@@ -16,11 +16,11 @@ const FIELDS = {
   postcode: 'Postcode', enquiry: 'Enquiry', status: 'Status', quote: 'Quote £ (ex VAT)',
   priority: 'Priority', owner: 'Owner', lastContact: 'Last contact', nextFollowUp: 'Next follow-up',
   lostReason: 'Lost reason', notes: 'Notes', chases: 'Chases', lastChased: 'Last chased',
-  wixId: 'Wix ID', lastActivity: 'Last activity', history: 'History'
+  wixId: 'Wix ID', lastActivity: 'Last activity', history: 'History', drawingSent: 'Drawing sent'
 };
-const DATE_FIELDS = ['date', 'lastContact', 'nextFollowUp', 'lastChased'];
+const DATE_FIELDS = ['date', 'lastContact', 'nextFollowUp', 'lastChased', 'drawingSent'];
 const EDITABLE = ['name', 'email', 'phone', 'postcode', 'enquiry', 'source', 'status', 'quote', 'priority', 'owner',
-  'nextFollowUp', 'lostReason', 'notes', 'chases', 'lastChased', 'lastContact'];
+  'nextFollowUp', 'lostReason', 'notes', 'chases', 'lastChased', 'lastContact', 'drawingSent'];
 const STATUSES = ['New', 'Phoned - no answer', 'Replied - no quote', 'Quote sent', 'Chased', 'Won', 'Lost'];
 const OLD_STATUS = { 'Not contacted': 'New', 'Contacted - no quote': 'Replied - no quote' };
 const STATUS_COLOURS = {
@@ -121,7 +121,7 @@ function updateLead(id, patch, action) {
       if (k === 'status' && !STATUSES.includes(v)) throw new Error('Unknown status ' + v);
       row[map[k]] = writeValue_(k, v);
     }
-    if (action && (action.type === 'status' || action.type === 'chase') && map.lastContact != null) row[map.lastContact] = today;
+    if (action && ['status', 'chase', 'call', 'email', 'drawing'].includes(action.type) && map.lastContact != null) row[map.lastContact] = today;
     if (map.history != null) {
       let hist = [];
       try { hist = row[map.history] ? JSON.parse(row[map.history]) : []; } catch (e) { hist = []; }

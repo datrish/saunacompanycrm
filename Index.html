@@ -138,6 +138,13 @@ h2 { font-size: 17px; font-weight: 600; }
 
 body { margin: 0; }
 [hidden] { display: none !important; }
+.tablewrap { overflow-x: auto; }
+table.team { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+table.team th, table.team td { padding: 7px 10px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+table.team th:first-child, table.team td:first-child { text-align: left; }
+table.team thead th { font-weight: 600; color: var(--muted); font-size: 12px; }
+table.team tr.total td { font-weight: 700; border-bottom: 0; }
+#period { font: inherit; font-size: 13px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); }
 *, *::before, *::after { box-sizing: border-box; }
 </style>
 </head>
@@ -165,13 +172,27 @@ body { margin: 0; }
       <div class="card-head"><h2>Daily progress</h2><span class="note">Last 30 days</span></div>
       <div class="legend" id="legend"></div>
       <div class="chart" id="chart"></div>
-      <p class="note">New leads in, and what the team did each day: first replies, quotes sent, chases, wins and losses.</p>
+      <p class="note">New leads in, and what the team did each day: calls, emails, drawings, quotes, chases, wins and losses.</p>
     </article>
     <article class="card">
       <div class="card-head"><h2>Chase today</h2><span class="note" id="due-count"></span></div>
       <ul class="due" id="due"></ul>
       <p class="note">Follow-ups that are due, quotes with no chase for 7 days, and new leads waiting more than a day.</p>
     </article>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><h2>Team activity</h2>
+      <select id="period" aria-label="Period">
+        <option value="week">This week</option>
+        <option value="lastweek">Last week</option>
+        <option value="month">This month</option>
+        <option value="30">Last 30 days</option>
+        <option value="all">Since the board started</option>
+      </select>
+    </div>
+    <div class="tablewrap"><table class="team" id="team"></table></div>
+    <p class="note">Counts every button tapped on the board, and who tapped it. Work done before the board started (5 Nov 2026) isn't counted.</p>
   </section>
 
   <section class="card" style="padding:16px 16px 18px">
@@ -293,7 +314,69 @@ function chase(l) {
   return save(l.id, { status: 'Chased', chases: (l.chases || 0) + 1, lastChased: t, nextFollowUp: addDays(t, 7) }, { type: 'chase', from: l.status, to: 'Chased' });
 }
 
+const ADVANCE = new Set(['New', 'Phoned - no answer']);
+function logAction(l, type) {
+  const t = todayISO();
+  const patch = {};
+  if ((type === 'call-spoke' || type === 'email') && ADVANCE.has(l.status)) patch.status = 'Replied - no quote';
+  if (type === 'call-none' && l.status === 'New') patch.status = 'Phoned - no answer';
+  if (type === 'drawing') patch.drawingSent = t;
+  if (!l.nextFollowUp || l.nextFollowUp <= t) patch.nextFollowUp = addDays(t, type === 'call-none' ? 1 : 3);
+  const kind = type === 'call-spoke' || type === 'call-none' ? 'call' : type;
+  const action = { type: kind, from: l.status, to: patch.status || l.status };
+  if (kind === 'call') action.outcome = type === 'call-none' ? 'no answer' : 'spoke';
+  return save(l.id, patch, action);
+}
+
 /* ---------- derived ---------- */
+function kindOf(e) {
+  if (!e) return null;
+  if (e.type === 'call' || e.type === 'email' || e.type === 'drawing' || e.type === 'chase') return e.type;
+  if (e.type !== 'status') return null;
+  if (e.to === 'Quote sent') return 'quote';
+  if (e.to === 'Won') return 'won';
+  if (e.to === 'Lost') return 'lost';
+  if (e.to === 'Phoned - no answer') return 'call';
+  if (e.to === 'Replied - no quote') return 'email';
+  return null;
+}
+const NAMES = { 'datrish@gmail.com': 'Deepti', 'hemantatrish@gmail.com': 'Hemant', 'spaziolondondesigners@gmail.com': 'Kiana' };
+const who = (by) => (!by ? 'Automatic' : NAMES[String(by).toLowerCase()] || String(by).split('@')[0]);
+function periodRange(p) {
+  const t = todayISO();
+  const d = new Date(t + 'T12:00:00');
+  const mon = addDays(t, -((d.getDay() + 6) % 7));
+  if (p === 'week') return [mon, t];
+  if (p === 'lastweek') return [addDays(mon, -7), addDays(mon, -1)];
+  if (p === 'month') return [t.slice(0, 8) + '01', t];
+  if (p === '30') return [addDays(t, -29), t];
+  return ['0000-00-00', t];
+}
+const TEAM_COLS = [['call', 'Calls'], ['email', 'Emails / replies'], ['drawing', 'Drawings sent'], ['quote', 'Quotes sent'], ['quoteValue', 'Quoted £'], ['chase', 'Chases'], ['won', 'Won'], ['lost', 'Lost']];
+function renderTeam() {
+  const [from, to] = periodRange(document.getElementById('period').value);
+  const byLead = Object.fromEntries(leads.map((l) => [l.id, l]));
+  const people = {};
+  const blank = () => ({ call: 0, email: 0, drawing: 0, quote: 0, quoteValue: 0, chase: 0, won: 0, lost: 0 });
+  for (const e of events()) {
+    const k = kindOf(e); const day = dayOf(e.at);
+    if (!k || day < from || day > to) continue;
+    const p = people[who(e.by)] = people[who(e.by)] || blank();
+    p[k]++;
+    if (k === 'quote') p.quoteValue += (byLead[e.lead] && byLead[e.lead].quote) || 0;
+  }
+  const names = Object.keys(people).sort();
+  const total = blank();
+  for (const n of names) for (const [k] of TEAM_COLS) total[k] += people[n][k];
+  const cell = (k, v) => (k === 'quoteValue' ? (v ? gbp(v) : '–') : String(v || '–'));
+  const table = document.getElementById('team');
+  if (!names.length) { table.replaceChildren(h('tbody', {}, h('tr', {}, h('td', { class: 'empty' }, 'Nothing logged in this period yet.')))); return; }
+  table.replaceChildren(
+    h('thead', {}, h('tr', {}, h('th', {}, 'Who'), ...TEAM_COLS.map(([, lbl]) => h('th', {}, lbl)))),
+    h('tbody', {},
+      ...names.map((n) => h('tr', {}, h('td', {}, n), ...TEAM_COLS.map(([k]) => h('td', {}, cell(k, people[n][k]))))),
+      names.length > 1 ? h('tr', { class: 'total' }, h('td', {}, 'Total'), ...TEAM_COLS.map(([k]) => h('td', {}, cell(k, total[k])))) : null));
+}
 function events() {
   const out = [];
   for (const l of leads) for (const e of (l.history || [])) out.push(Object.assign({ lead: l.id }, e));
@@ -315,7 +398,7 @@ function dueList() {
 /* ---------- render ---------- */
 function render() {
   if (!loaded) return;
-  renderToday(); renderStrip(); renderChart(); renderDue(); renderList();
+  renderToday(); renderStrip(); renderChart(); renderTeam(); renderDue(); renderList();
   document.getElementById('add-btn').disabled = !canWrite;
 }
 
@@ -323,15 +406,17 @@ function renderToday() {
   const t = todayISO();
   const newToday = leads.filter((l) => l.date === t).length;
   const ev = events().filter((e) => dayOf(e.at) === t && e.type !== 'created');
-  const quotes = ev.filter((e) => e.to === 'Quote sent').length;
-  const chases = ev.filter((e) => e.type === 'chase').length;
-  const won = ev.filter((e) => e.to === 'Won').length;
+  const quotes = ev.filter((e) => kindOf(e) === 'quote').length;
+  const calls = ev.filter((e) => kindOf(e) === 'call').length;
+  const drawings = ev.filter((e) => kindOf(e) === 'drawing').length;
+  const chases = ev.filter((e) => kindOf(e) === 'chase').length;
+  const won = ev.filter((e) => kindOf(e) === 'won').length;
   const openNoQuote = leads.filter((l) => l.status === 'New' || l.status === 'Phoned - no answer' || l.status === 'Replied - no quote').length;
   const p = document.getElementById('today-line');
   p.replaceChildren(
     'Today: ', h('b', {}, String(newToday)), newToday === 1 ? ' new lead, ' : ' new leads, ',
     h('b', {}, String(ev.length)), ev.length === 1 ? ' update' : ' updates',
-    ` (${quotes} quoted, ${chases} chased, ${won} won). `,
+    ` (${calls} calls, ${drawings} drawings, ${quotes} quotes, ${chases} chases, ${won} won). `,
     h('b', {}, String(openNoQuote)), ' leads still have no quote.'
   );
 }
@@ -351,24 +436,22 @@ function renderStrip() {
 }
 
 const SERIES = [
-  { k: 'replied', label: 'First replies', c: '--s-replied' },
-  { k: 'quoted', label: 'Quotes sent', c: '--s-quote' },
-  { k: 'chased', label: 'Chases', c: '--s-chased' },
+  { k: 'call', label: 'Calls', c: '--s-phoned' },
+  { k: 'email', label: 'Emails', c: '--s-replied' },
+  { k: 'drawing', label: 'Drawings', c: '--timber' },
+  { k: 'quote', label: 'Quotes sent', c: '--s-quote' },
+  { k: 'chase', label: 'Chases', c: '--s-chased' },
   { k: 'won', label: 'Won', c: '--s-won' },
   { k: 'lost', label: 'Lost', c: '--s-lost' },
 ];
 function renderChart() {
   const t = todayISO();
   const days = []; for (let i = 29; i >= 0; i--) days.push(addDays(t, -i));
-  const by = Object.fromEntries(days.map((d) => [d, { d, newL: 0, replied: 0, quoted: 0, chased: 0, won: 0, lost: 0 }]));
+  const by = Object.fromEntries(days.map((d) => [d, { d, newL: 0, call: 0, email: 0, drawing: 0, quote: 0, chase: 0, won: 0, lost: 0 }]));
   for (const l of leads) if (by[l.date]) by[l.date].newL++;
   for (const e of events()) {
-    const d = by[dayOf(e.at)]; if (!d || e.type === 'created' || e.type === 'import') continue;
-    if (e.type === 'chase') d.chased++;
-    else if (e.to === 'Quote sent') d.quoted++;
-    else if (e.to === 'Won') d.won++;
-    else if (e.to === 'Lost') d.lost++;
-    else if (e.to === 'Replied - no quote' || e.to === 'Phoned - no answer') d.replied++;
+    const d = by[dayOf(e.at)]; const k = kindOf(e);
+    if (d && k) d[k]++;
   }
   const rows = days.map((d) => by[d]);
   document.getElementById('legend').replaceChildren(
@@ -465,12 +548,15 @@ function editor(l) {
     h('dt', {}, 'Email'), h('dd', {}, l.email || ''),
     h('dt', {}, 'Area'), h('dd', {}, l.postcode || ''),
     h('dt', {}, 'Enquiry'), h('dd', {}, l.enquiry || ''),
+    h('dt', {}, 'Drawing sent'), h('dd', {}, l.drawingSent ? prettyDate(l.drawingSent) : '–'),
     h('dt', {}, 'Chases'), h('dd', { class: 'num' }, String(l.chases || 0) + (l.lastChased ? ` (last ${prettyDate(l.lastChased)})` : '')));
   const quickBtn = (txt, fn, primary) => h('button', { class: 'btn' + (primary ? ' primary' : ''), type: 'button', disabled: dis, onclick: fn }, txt);
   const form = h('div', { class: 'form' },
     h('div', { class: 'quick' },
-      quickBtn('Phoned, no answer', () => setStatus(l, 'Phoned - no answer')),
-      quickBtn('Replied', () => setStatus(l, 'Replied - no quote')),
+      quickBtn('Called – no answer', () => logAction(l, 'call-none')),
+      quickBtn('Called – spoke', () => logAction(l, 'call-spoke')),
+      quickBtn('Emailed', () => logAction(l, 'email')),
+      quickBtn('Drawing sent', () => logAction(l, 'drawing')),
       quickBtn('Quote sent', () => setStatus(l, 'Quote sent', { nextFollowUp: l.nextFollowUp || addDays(todayISO(), 3) }), true),
       quickBtn('Chased today', () => chase(l)),
       quickBtn('Won', () => setStatus(l, 'Won', { nextFollowUp: '' })),
@@ -482,7 +568,7 @@ function editor(l) {
     field('Priority', sel(['High', 'Medium', 'Low'], l.priority, (e) => save(l.id, { priority: e.target.value }, { type: 'edit', field: 'priority' }), 'Priority')),
     l.status === 'Lost' ? field('Lost reason', sel(LOST, l.lostReason, (e) => save(l.id, { lostReason: e.target.value }, { type: 'edit', field: 'lostReason' }), 'Lost reason')) : h('span'),
     field('Notes', h('textarea', { disabled: dis, onchange: blurSave('notes') }, l.notes || ''), true),
-    h('ul', { class: 'hist' }, ...(l.history || []).slice().reverse().slice(0, 12).map((e) => h('li', {}, `${new Date(e.at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}${e.by ? ' (' + String(e.by).split('@')[0] + ')' : ''}: ${e.type === 'chase' ? 'Chased' : e.type === 'status' ? `${(SBY[e.from] || {}).label || e.from || '-'} → ${(SBY[e.to] || {}).label || e.to}` : e.type === 'created' ? 'Lead added' : e.type === 'import' ? 'Imported from the lead review' : e.type === 'wix' ? 'Website form' : 'Edited ' + (e.field || '')}`))));
+    h('ul', { class: 'hist' }, ...(l.history || []).slice().reverse().slice(0, 12).map((e) => h('li', {}, `${new Date(e.at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}${e.by ? ' (' + String(e.by).split('@')[0] + ')' : ''}: ${e.type === 'call' ? (e.outcome === 'no answer' ? 'Called, no answer' : 'Called, spoke') : e.type === 'email' ? 'Emailed' : e.type === 'drawing' ? 'Drawing sent' : e.type === 'chase' ? 'Chased' : e.type === 'status' ? `${(SBY[e.from] || {}).label || e.from || '-'} → ${(SBY[e.to] || {}).label || e.to}` : e.type === 'created' ? 'Lead added' : e.type === 'import' ? 'Imported from the lead review' : e.type === 'wix' ? 'Website form' : 'Edited ' + (e.field || '')}`))));
   return h('div', { class: 'edit' }, facts, form);
 }
 
@@ -510,6 +596,7 @@ document.getElementById('add-form').addEventListener('submit', async (e) => {
 /* ---------- controls ---------- */
 document.getElementById('q').addEventListener('input', (e) => { ui.q = e.target.value.trim(); if (ui.q && ui.status === 'open') ui.status = 'all'; renderList(); renderStrip(); });
 document.getElementById('src').addEventListener('change', (e) => { ui.src = e.target.value; renderList(); });
+document.getElementById('period').addEventListener('change', () => loaded && renderTeam());
 document.getElementById('sort').addEventListener('change', (e) => { ui.sort = e.target.value; renderList(); });
 let rz; window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => loaded && renderChart(), 150); });
 
