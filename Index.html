@@ -138,6 +138,8 @@ h2 { font-size: 17px; font-weight: 600; }
 
 body { margin: 0; }
 [hidden] { display: none !important; }
+.confirm { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 8px; background: var(--timber-soft); border: 1px solid var(--timber); }
+.confirm span { flex: 1 1 200px; }
 .tablewrap { overflow-x: auto; }
 table.team { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
 table.team th, table.team td { padding: 7px 10px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
@@ -278,7 +280,7 @@ const pill = (status) => { const s = SBY[status] || SBY.New; return h('span', { 
 
 let me = '', canWrite = true, leads = [], loaded = false, lastLoad = null;
 const api = (fn, ...args) => new Promise((res, rej) => google.script.run.withSuccessHandler(res).withFailureHandler(rej)[fn](...args));
-const ui = { status: 'open', q: '', src: '', sort: 'priority', open: null };
+const ui = { status: 'open', q: '', src: '', sort: 'priority', open: null, confirm: null };
 const queues = {};
 
 function toast(msg) {
@@ -330,8 +332,11 @@ function logAction(l, type) {
   const kind = type === 'call-spoke' || type === 'call-none' ? 'call' : type;
   const action = { type: kind, from: l.status, to: patch.status || l.status };
   if (kind === 'call') action.outcome = type === 'call-none' ? 'no answer' : 'spoke';
+  if (kind === 'drawing') action.rev = drawingCount(l) + 1;
   return save(l.id, patch, action);
 }
+
+function drawingCount(l) { return (l.history || []).filter((e) => e.type === 'drawing').length; }
 
 /* ---------- derived ---------- */
 function kindOf(e) {
@@ -360,18 +365,19 @@ function periodRange(p) {
   if (p === '30') return [addDays(t, -29), t];
   return ['0000-00-00', t];
 }
-const TEAM_COLS = [['call', 'Calls'], ['email', 'Emails / replies'], ['drawing', 'Drawings sent'], ['quote', 'Quotes sent'], ['quoteValue', 'Quoted £'], ['chase', 'Chases'], ['won', 'Won'], ['lost', 'Lost']];
+const TEAM_COLS = [['call', 'Calls'], ['email', 'Emails / replies'], ['drawing', 'Drawings sent'], ['revision', 'of which revisions'], ['quote', 'Quotes sent'], ['quoteValue', 'Quoted £'], ['chase', 'Chases'], ['won', 'Won'], ['lost', 'Lost']];
 function renderTeam() {
   const [from, to] = periodRange(document.getElementById('period').value);
   const byLead = Object.fromEntries(leads.map((l) => [l.id, l]));
   const people = {};
-  const blank = () => ({ call: 0, email: 0, drawing: 0, quote: 0, quoteValue: 0, chase: 0, won: 0, lost: 0 });
+  const blank = () => ({ call: 0, email: 0, drawing: 0, revision: 0, quote: 0, quoteValue: 0, chase: 0, won: 0, lost: 0 });
   for (const e of events()) {
     const k = kindOf(e); const day = dayOf(e.at);
     if (!k || day < from || day > to) continue;
     const p = people[who(e.by)] = people[who(e.by)] || blank();
     p[k]++;
     if (k === 'quote') p.quoteValue += (byLead[e.lead] && byLead[e.lead].quote) || 0;
+    if (k === 'drawing' && (e.rev || 1) > 1) p.revision++;
   }
   const names = Object.keys(people).sort();
   const total = blank();
@@ -532,7 +538,7 @@ function renderList() {
   if (!rows.length) { list.replaceChildren(h('div', { class: 'empty', style: 'padding:16px' }, leads.length ? 'No leads match. Clear the search or pick another status.' : 'No leads yet. New website enquiries arrive here every hour, or add one with "+ Add a lead".')); return; }
   list.replaceChildren(...rows.slice(0, 400).map((l) => {
     const open = ui.open === l.id;
-    const head = h('button', { class: 'row-head', type: 'button', 'aria-expanded': String(open), onclick: () => { ui.open = open ? null : l.id; renderList(); } },
+    const head = h('button', { class: 'row-head', type: 'button', 'aria-expanded': String(open), onclick: () => { ui.open = open ? null : l.id; ui.confirm = null; renderList(); } },
       h('span', { class: 'c-id mono muted' }, l.id),
       h('span', { class: 'c-date num muted' }, prettyDate(l.date)),
       h('span', { class: 'name' }, l.name || '(no name)'),
@@ -556,27 +562,34 @@ function editor(l) {
     h('dt', {}, 'Email'), h('dd', {}, l.email || ''),
     h('dt', {}, 'Area'), h('dd', {}, l.postcode || ''),
     h('dt', {}, 'Enquiry'), h('dd', {}, l.enquiry || ''),
-    h('dt', {}, 'Drawing sent'), h('dd', {}, l.drawingSent ? prettyDate(l.drawingSent) : '–'),
+    h('dt', {}, 'Drawing sent'), h('dd', {}, drawingCount(l) ? `${drawingCount(l)} time${drawingCount(l) > 1 ? 's' : ''}, last ${prettyDate(l.drawingSent)}${drawingCount(l) > 1 ? ' (rev ' + drawingCount(l) + ')' : ''}` : (l.drawingSent ? prettyDate(l.drawingSent) : '–')),
     h('dt', {}, 'Chases'), h('dd', { class: 'num' }, String(l.chases || 0) + (l.lastChased ? ` (last ${prettyDate(l.lastChased)})` : '')));
-  const quickBtn = (txt, fn, primary) => h('button', { class: 'btn' + (primary ? ' primary' : ''), type: 'button', disabled: dis, onclick: fn }, txt);
+  const ask = (label, fn) => { ui.confirm = { id: l.id, label, fn }; renderList(); };
+  const quickBtn = (txt, fn, primary) => h('button', { class: 'btn' + (primary ? ' primary' : ''), type: 'button', disabled: dis, onclick: () => ask(txt, fn) }, txt);
+  const pending = ui.confirm && ui.confirm.id === l.id ? ui.confirm : null;
+  const confirmBar = pending ? h('div', { class: 'confirm', role: 'alertdialog', 'aria-label': 'Confirm' },
+    h('span', {}, 'Log ', h('b', {}, pending.label), ' for ', h('b', {}, l.name || l.id), '?'),
+    h('button', { class: 'btn primary', type: 'button', onclick: () => { const f = pending.fn; ui.confirm = null; f(); } }, 'Confirm'),
+    h('button', { class: 'btn', type: 'button', onclick: () => { ui.confirm = null; renderList(); } }, 'Cancel')) : null;
   const form = h('div', { class: 'form' },
-    h('div', { class: 'quick' },
+    confirmBar,
+    pending ? null : h('div', { class: 'quick' },
       quickBtn('Called – no answer', () => logAction(l, 'call-none')),
       quickBtn('Called – spoke', () => logAction(l, 'call-spoke')),
       quickBtn('Emailed', () => logAction(l, 'email')),
-      quickBtn('Drawing sent', () => logAction(l, 'drawing')),
+      quickBtn(drawingCount(l) ? `Revised drawing sent (rev ${drawingCount(l) + 1})` : 'Drawing sent', () => logAction(l, 'drawing')),
       quickBtn('Quote sent', () => setStatus(l, 'Quote sent', { nextFollowUp: l.nextFollowUp || addDays(todayISO(), 3) }), true),
       quickBtn('Chased today', () => chase(l)),
       quickBtn('Won', () => setStatus(l, 'Won', { nextFollowUp: '' })),
       quickBtn('Lost', () => setStatus(l, 'Lost', { nextFollowUp: '' }))),
-    field('Status', sel(STATUSES, l.status, (e) => setStatus(l, e.target.value), 'Status')),
+    field('Status', sel(STATUSES, l.status, (e) => { const to = e.target.value; ask('status: ' + ((SBY[to] || {}).label || to), () => setStatus(l, to)); }, 'Status')),
     field('Owner', sel(OWNERS, l.owner, (e) => save(l.id, { owner: e.target.value }, { type: 'edit', field: 'owner' }), 'Owner')),
     field('Quote £ (ex VAT)', h('input', { type: 'number', min: '0', step: '1', inputmode: 'numeric', value: l.quote || '', disabled: dis, onchange: blurSave('quote', (v) => (v === '' ? null : Number(v))) })),
     field('Next follow-up', h('input', { type: 'date', value: l.nextFollowUp || '', disabled: dis, onchange: blurSave('nextFollowUp') })),
     field('Priority', sel(['High', 'Medium', 'Low'], l.priority, (e) => save(l.id, { priority: e.target.value }, { type: 'edit', field: 'priority' }), 'Priority')),
     l.status === 'Lost' ? field('Lost reason', sel(LOST, l.lostReason, (e) => save(l.id, { lostReason: e.target.value }, { type: 'edit', field: 'lostReason' }), 'Lost reason')) : h('span'),
     field('Notes', h('textarea', { disabled: dis, onchange: blurSave('notes') }, l.notes || ''), true),
-    h('ul', { class: 'hist' }, ...(l.history || []).slice().reverse().slice(0, 12).map((e) => h('li', {}, `${new Date(e.at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}${e.by ? ' (' + String(e.by).split('@')[0] + ')' : ''}: ${e.type === 'call' ? (e.outcome === 'no answer' ? 'Called, no answer' : 'Called, spoke') : e.type === 'email' ? 'Emailed' : e.type === 'drawing' ? 'Drawing sent' : e.type === 'chase' ? 'Chased' : e.type === 'status' ? `${(SBY[e.from] || {}).label || e.from || '-'} → ${(SBY[e.to] || {}).label || e.to}` : e.type === 'created' ? 'Lead added' : e.type === 'import' ? 'Imported from the lead review' : e.type === 'wix' ? 'Website form' : 'Edited ' + (e.field || '')}`))));
+    h('ul', { class: 'hist' }, ...(l.history || []).slice().reverse().slice(0, 12).map((e) => h('li', {}, `${new Date(e.at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}${e.by ? ' (' + String(e.by).split('@')[0] + ')' : ''}: ${e.type === 'call' ? (e.outcome === 'no answer' ? 'Called, no answer' : 'Called, spoke') : e.type === 'email' ? 'Emailed' : e.type === 'drawing' ? ((e.rev || 1) > 1 ? 'Revised drawing sent (rev ' + e.rev + ')' : 'Drawing sent') : e.type === 'chase' ? 'Chased' : e.type === 'status' ? `${(SBY[e.from] || {}).label || e.from || '-'} → ${(SBY[e.to] || {}).label || e.to}` : e.type === 'created' ? 'Lead added' : e.type === 'import' ? 'Imported from the lead review' : e.type === 'wix' ? 'Website form' : 'Edited ' + (e.field || '')}`))));
   return h('div', { class: 'edit' }, facts, form);
 }
 
