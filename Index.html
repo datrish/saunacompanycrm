@@ -405,7 +405,7 @@ function render() {
 function renderToday() {
   const t = todayISO();
   const newToday = leads.filter((l) => l.date === t).length;
-  const ev = events().filter((e) => dayOf(e.at) === t && e.type !== 'created');
+  const ev = events().filter((e) => dayOf(e.at) === t && kindOf(e));
   const quotes = ev.filter((e) => kindOf(e) === 'quote').length;
   const calls = ev.filter((e) => kindOf(e) === 'call').length;
   const drawings = ev.filter((e) => kindOf(e) === 'drawing').length;
