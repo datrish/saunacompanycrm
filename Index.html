@@ -149,6 +149,23 @@ body { margin: 0; }
 .ps.paid { background: var(--s-won-bg); } .ps.inv { background: var(--s-quote-bg); } .ps.over { background: var(--s-new-bg); color: var(--s-new); font-weight: 600; } .ps.none { background: var(--soft); color: var(--muted); }
 .paystrip { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); gap: 8px; }
 .paystrip .stat { cursor: default; }
+.paysum { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
+.paysum > div { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; background: var(--soft); border-radius: 8px; }
+.paysum b { font-family: var(--display); font-size: 18px; }
+.paysum .bal { color: var(--timber); }
+.progress { display: flex; gap: 4px; flex-wrap: wrap; }
+.pstep { flex: 1 1 100px; text-align: center; font-size: 12px; padding: 6px 4px; border-radius: 6px; background: var(--soft); color: var(--muted); }
+.stage-dates { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12.5px; color: var(--muted); margin-top: 6px; } .stage-dates b { color: var(--ink); font-weight: 600; }
+.confirm .cdate { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; } .confirm .cdate input { width: auto; }
+.pstep.paid { background: var(--s-won-bg); color: var(--ink); font-weight: 600; }
+.pstep.inv { background: var(--s-quote-bg); color: var(--ink); }
+.pstep.over { background: var(--s-new-bg); color: var(--s-new); font-weight: 600; }
+.stage { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+.stage.next { border-color: var(--timber); }
+.stage-main { display: grid; grid-template-columns: minmax(0, 1.4fr) auto minmax(0, 1fr); gap: 10px; align-items: center; }
+@media (max-width: 760px) { .stage-main { grid-template-columns: 1fr; } }
+.stage-name { display: flex; flex-direction: column; }
+.stage details summary { cursor: pointer; font-size: 12px; color: var(--muted); margin-top: 6px; }
 .linkbtn { font: inherit; background: none; border: 0; padding: 0; color: var(--ink); text-decoration: underline; cursor: pointer; text-align: left; }
 .confirm { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 8px; background: var(--timber-soft); border: 1px solid var(--timber); }
 .confirm span { flex: 1 1 200px; }
@@ -197,10 +214,10 @@ table.team tr.total td { font-weight: 700; border-bottom: 0; }
   </section>
 
   <section class="card" id="pay-card">
-    <div class="card-head"><h2>Payments expected</h2><span class="note">Won projects · amounts ex VAT (inc VAT underneath)</span></div>
+    <div class="card-head"><h2>Won clients &amp; payments</h2><span class="note">Amounts ex VAT, inc VAT underneath</span></div>
     <div class="paystrip" id="paystrip"></div>
     <div class="tablewrap"><table class="team" id="paylist"></table></div>
-    <p class="note">Open a won project to set up its stages, then tap Invoice sent and Paid as they happen.</p>
+    <p class="note">Stages (25% advance, 40% frame, 30% cladding, 5% final) are created when a lead is marked Won. Open a client and tap Invoice sent, then Paid.</p>
   </section>
 
   <section class="card">
@@ -333,6 +350,7 @@ function save(id, patch, action) {
 function setStatus(l, to, extra) {
   if (l.status === to && !extra) return;
   const patch = Object.assign({ status: to }, extra || {});
+  if (to === 'Won' && !(Array.isArray(l.payments) && l.payments.length)) patch.payments = defaultStages(Object.assign({}, l, patch));
   return save(l.id, patch, { type: 'status', from: l.status, to });
 }
 function chase(l) {
@@ -445,60 +463,88 @@ function defaultStages(l) {
     return { stage, amount, invRef: '', invSent: '', due: '', paid: '' };
   });
 }
+function projectPays(l) { return (Array.isArray(l.payments) && l.payments.length ? l.payments : defaultStages(l)).map((p) => Object.assign({}, p)); }
+function projectSummary(l) {
+  const pays = projectPays(l);
+  const contract = l.quote || pays.reduce((a, p) => a + (Number(p.amount) || 0), 0);
+  const received = pays.filter((p) => p.paid).reduce((a, p) => a + (Number(p.amount) || 0), 0);
+  const awaiting = pays.filter((p) => p.invSent && !p.paid).reduce((a, p) => a + (Number(p.amount) || 0), 0);
+  const overdue = pays.filter((p) => payStatus(p).k === 'over');
+  const next = pays.find((p) => !p.paid);
+  return { pays, contract, received, awaiting, balance: contract - received, overdue, next };
+}
 function renderPayments() {
-  const t = todayISO(); const in30 = addDays(t, 30); const monthStart = t.slice(0, 8) + '01';
-  const rows = [];
-  for (const l of leads) for (const [i, p] of (Array.isArray(l.payments) ? l.payments : []).entries()) rows.push({ l, i, p, st: payStatus(p) });
-  const sum = (arr) => arr.reduce((a, r) => a + (Number(r.p.amount) || 0), 0);
-  const outstanding = rows.filter((r) => r.st.k === 'inv' || r.st.k === 'over');
-  const overdue = rows.filter((r) => r.st.k === 'over');
-  const due30 = rows.filter((r) => r.st.k === 'inv' && r.p.due && r.p.due <= in30);
-  const notInv = rows.filter((r) => r.st.k === 'none');
-  const paidMonth = rows.filter((r) => r.st.k === 'paid' && r.p.paid >= monthStart);
-  const wonNoStages = leads.filter((l) => l.status === 'Won' && !(Array.isArray(l.payments) && l.payments.length));
-  const tile = (label, arr, c, sub) => h('div', { class: 'stat' }, h('span', { class: 'lbl' }, h('i', { class: 'dot', style: `--c: var(${c})` }), label), h('span', { class: 'big' }, gbpShort(sum(arr))), h('span', { class: 'sub' }, sub || `${arr.length} stage${arr.length === 1 ? '' : 's'} · ${gbpShort(incVat(sum(arr)))} inc VAT`));
+  const monthStart = todayISO().slice(0, 8) + '01';
+  const won = leads.filter((l) => l.status === 'Won');
+  const rows = won.map((l) => Object.assign({ l }, projectSummary(l)));
+  const sumOf = (k) => rows.reduce((a, r) => a + r[k], 0);
+  const overdueSum = rows.reduce((a, r) => a + r.overdue.reduce((x, p) => x + (Number(p.amount) || 0), 0), 0);
+  const paidMonth = rows.reduce((a, r) => a + r.pays.filter((p) => p.paid && p.paid >= monthStart).reduce((x, p) => x + (Number(p.amount) || 0), 0), 0);
+  const tile = (label, v, c, sub) => h('div', { class: 'stat' }, h('span', { class: 'lbl' }, h('i', { class: 'dot', style: `--c: var(${c})` }), label), h('span', { class: 'big' }, gbpShort(v)), h('span', { class: 'sub' }, sub || `${gbpShort(incVat(v))} inc VAT`));
   document.getElementById('paystrip').replaceChildren(
-    tile('Invoiced, not paid', outstanding, '--s-quote'),
-    tile('Overdue', overdue, '--s-new'),
-    tile('Due in next 30 days', due30, '--s-replied'),
-    tile('Not yet invoiced', notInv, '--s-lost'),
+    tile('Balance to collect', sumOf('balance'), '--timber', `${won.length} won client${won.length === 1 ? '' : 's'} · ${gbpShort(incVat(sumOf('balance')))} inc VAT`),
+    tile('Invoiced, awaiting payment', sumOf('awaiting'), '--s-quote'),
+    tile('Overdue', overdueSum, '--s-new'),
     tile('Received this month', paidMonth, '--s-won'));
-  const list = rows.filter((r) => r.st.k !== 'paid').sort((a, b) => ({ over: 0, inv: 1, none: 2 }[a.st.k] - { over: 0, inv: 1, none: 2 }[b.st.k]) || String(a.p.due || '9999').localeCompare(String(b.p.due || '9999')));
-  const table = document.getElementById('paylist');
-  const body = list.slice(0, 30).map((r) => h('tr', {},
-    h('td', {}, h('button', { type: 'button', class: 'linkbtn', onclick: () => { ui.status = 'all'; ui.q = r.l.id; document.getElementById('q').value = r.l.id; ui.open = r.l.id; render(); document.getElementById('list').scrollIntoView({ behavior: 'smooth' }); } }, r.l.name || r.l.id)),
-    h('td', {}, r.p.stage || ''), h('td', {}, gbp(r.p.amount)), h('td', {}, gbp(incVat(r.p.amount))), h('td', {}, h('span', { class: 'ps ' + r.st.k }, r.st.label))));
-  if (wonNoStages.length) body.push(h('tr', {}, h('td', { colspan: '5', class: 'note' }, `${wonNoStages.length} won project${wonNoStages.length === 1 ? ' has' : 's have'} no payment stages yet: ${wonNoStages.map((l) => l.name).join(', ')}`)));
-  table.replaceChildren(h('thead', {}, h('tr', {}, h('th', {}, 'Project'), h('th', {}, 'Stage'), h('th', {}, 'Ex VAT'), h('th', {}, 'Inc VAT'), h('th', {}, 'Status'))), h('tbody', {}, ...(body.length ? body : [h('tr', {}, h('td', { colspan: '5', class: 'empty' }, 'No payments expected yet.'))])));
+  const rank = (r) => (r.overdue.length ? 0 : r.awaiting ? 1 : r.balance > 0 ? 2 : 3);
+  rows.sort((a, b) => rank(a) - rank(b) || b.balance - a.balance);
+  const nextText = (r) => {
+    if (!r.next) return h('span', { class: 'ps paid' }, 'Fully paid');
+    const st = payStatus(r.next);
+    return h('span', {}, h('span', { class: 'ps ' + st.k }, st.k === 'none' ? 'To invoice' : st.label), ' ', r.next.stage, ' ', gbp(r.next.amount));
+  };
+  const open = (l) => () => { ui.status = 'all'; ui.q = l.id; document.getElementById('q').value = l.id; ui.open = l.id; render(); document.getElementById('list').scrollIntoView({ behavior: 'smooth' }); };
+  document.getElementById('paylist').replaceChildren(
+    h('thead', {}, h('tr', {}, ...['Client', 'Contract', 'Received', 'Balance', 'Next payment'].map((x) => h('th', {}, x)))),
+    h('tbody', {}, ...(rows.length ? rows.map((r) => h('tr', {},
+      h('td', {}, h('button', { type: 'button', class: 'linkbtn', onclick: open(r.l) }, r.l.name || r.l.id)),
+      h('td', {}, gbp(r.contract) || '–'), h('td', {}, gbp(r.received) || '£0'), h('td', {}, h('b', {}, gbp(r.balance) || '£0')),
+      h('td', {}, nextText(r)))) : [h('tr', {}, h('td', { colspan: '5', class: 'empty' }, 'No won clients yet.'))])));
 }
 function paymentsBlock(l, ask) {
   const dis = !canWrite;
-  const pays = Array.isArray(l.payments) ? l.payments.map((p) => Object.assign({}, p)) : [];
+  const sm = projectSummary(l);
+  const pays = sm.pays;
   const store = (arr, action) => save(l.id, { payments: arr }, action || { type: 'edit', field: 'payments' });
-  if (!pays.length) {
-    return h('div', { class: 'pay' }, h('h3', {}, 'Payments'),
-      h('div', { class: 'quick' }, h('button', { class: 'btn primary', type: 'button', disabled: dis, onclick: () => ask('payment stages 25% / 40% / 30% / 5%' + (l.quote ? ' of ' + gbp(l.quote) : ''), () => store(defaultStages(l))) }, 'Set up payment stages'),
-        l.quote ? null : h('span', { class: 'note' }, 'Fill in Quote £ first so the amounts calculate.')));
-  }
-  const upd = (i, key, val) => { const arr = pays.map((p) => Object.assign({}, p)); arr[i][key] = val; store(arr); };
-  const inp = (i, key, type) => h('input', { type: type || 'text', value: pays[i][key] || '', disabled: dis, 'aria-label': key, onchange: (e) => upd(i, key, type === 'number' ? Number(e.target.value) || 0 : e.target.value.trim()) });
-  const total = pays.reduce((a, p) => a + (Number(p.amount) || 0), 0);
-  const paid = pays.filter((p) => p.paid).reduce((a, p) => a + (Number(p.amount) || 0), 0);
+  const withChange = (i, fn) => { const arr = pays.map((x) => Object.assign({}, x)); fn(arr[i]); return arr; };
+  const t = todayISO();
+  const btn = (txt, primary, fn) => h('button', { class: 'btn' + (primary ? ' primary' : ''), type: 'button', disabled: dis, onclick: fn }, txt);
+  const stageRow = (p, i) => {
+    const st = payStatus(p);
+    const isNext = sm.next === p;
+    let actions;
+    if (!p.invSent) actions = [btn('Invoice sent', isNext, () => ask(`invoice sent: ${p.stage} (${gbp(p.amount)} + VAT)`, (d) => store(withChange(i, (x) => { x.invSent = d; if (!x.due) x.due = addDays(d, 7); }), { type: 'invoice', stage: p.stage, amount: Number(p.amount) || 0, date: d }), { date: true }))];
+    else if (!p.paid) actions = [btn('Payment received', true, () => ask(`payment received: ${p.stage} (${gbp(p.amount)} + VAT)`, (d) => store(withChange(i, (x) => { x.paid = d; }), { type: 'paid', stage: p.stage, amount: Number(p.amount) || 0, date: d }), { date: true })),
+      btn('Chase payment' + (p.chased ? ` (${p.chased})` : ''), false, () => ask(`payment chased: ${p.stage}`, () => store(withChange(i, (x) => { x.chased = (x.chased || 0) + 1; x.lastChased = t; }), { type: 'paychase', stage: p.stage, amount: Number(p.amount) || 0 })))];
+    else actions = [h('span', { class: 'ps paid' }, '✓ Paid ' + prettyDate(p.paid))];
+    const inp = (key, type, label) => h('label', {}, label, h('input', { type: type || 'text', value: p[key] || '', disabled: dis, onchange: (e) => store(withChange(i, (x) => { x[key] = type === 'number' ? Number(e.target.value) || 0 : e.target.value.trim(); })) }));
+    return h('div', { class: 'stage ' + st.k + (isNext ? ' next' : '') },
+      h('div', { class: 'stage-main' },
+        h('div', { class: 'stage-name' }, h('b', {}, p.stage), h('span', { class: 'note' }, `${gbp(p.amount)} + VAT = ${gbp(incVat(p.amount))}`)),
+        h('span', { class: 'ps ' + st.k }, st.label + (p.invRef ? ' · ' + p.invRef : '')),
+        h('div', { class: 'quick', style: 'justify-content:flex-end' }, ...actions)),
+      h('div', { class: 'stage-dates' },
+        h('span', {}, 'Invoice sent: ', h('b', {}, p.invSent ? prettyDate(p.invSent) : '–')),
+        h('span', {}, 'Due: ', h('b', {}, p.due ? prettyDate(p.due) : '–')),
+        h('span', {}, 'Payment received: ', h('b', {}, p.paid ? prettyDate(p.paid) : '–')),
+        p.chased ? h('span', {}, 'Chased: ', h('b', {}, p.chased + '× (last ' + prettyDate(p.lastChased) + ')')) : null),
+      h('details', {}, h('summary', {}, 'Edit'),
+        h('div', { class: 'form', style: 'margin-top:8px' }, inp('stage', 'text', 'Stage'), inp('amount', 'number', 'Amount £ ex VAT'), inp('invRef', 'text', 'Invoice ref'), inp('invSent', 'date', 'Invoice sent'), inp('due', 'date', 'Due'), inp('paid', 'date', 'Paid'),
+          h('div', { class: 'quick' }, btn('Remove this stage', false, () => ask(`removing stage "${p.stage}"`, () => store(pays.filter((_, j) => j !== i))))))));
+  };
+  const pct = sm.contract ? Math.round((sm.received / sm.contract) * 100) : 0;
   return h('div', { class: 'pay' },
-    h('h3', {}, 'Payments'),
-    h('div', { class: 'tablewrap' }, h('table', {},
-      h('thead', {}, h('tr', {}, ...['Stage', 'Ex VAT £', 'Invoice ref', 'Invoice sent', 'Due', 'Paid', 'Status', ''].map((x) => h('th', {}, x)))),
-      h('tbody', {}, ...pays.map((p, i) => h('tr', {},
-        h('td', {}, inp(i, 'stage')), h('td', {}, inp(i, 'amount', 'number')), h('td', {}, inp(i, 'invRef')),
-        h('td', {}, inp(i, 'invSent', 'date')), h('td', {}, inp(i, 'due', 'date')), h('td', {}, inp(i, 'paid', 'date')),
-        h('td', {}, h('span', { class: 'ps ' + payStatus(p).k }, payStatus(p).label)),
-        h('td', {}, h('div', { class: 'quick', style: 'flex-wrap:nowrap' },
-          !p.invSent ? h('button', { class: 'btn', type: 'button', disabled: dis, onclick: () => ask(`invoice sent: ${p.stage} (${gbp(p.amount)})`, () => { const arr = pays.map((x) => Object.assign({}, x)); arr[i].invSent = todayISO(); if (!arr[i].due) arr[i].due = addDays(todayISO(), 7); store(arr, { type: 'invoice', stage: p.stage, amount: Number(p.amount) || 0 }); }) }, 'Invoice sent') : null,
-          !p.paid ? h('button', { class: 'btn', type: 'button', disabled: dis, onclick: () => ask(`payment received: ${p.stage} (${gbp(p.amount)})`, () => { const arr = pays.map((x) => Object.assign({}, x)); arr[i].paid = todayISO(); store(arr, { type: 'paid', stage: p.stage, amount: Number(p.amount) || 0 }); }) }, 'Paid') : null,
-          h('button', { class: 'btn', type: 'button', disabled: dis, title: 'Remove stage', onclick: () => ask(`removing stage "${p.stage}"`, () => store(pays.filter((_, j) => j !== i))) }, '✕')))))))),
-    h('div', { class: 'quick' },
-      h('button', { class: 'btn', type: 'button', disabled: dis, onclick: () => store(pays.concat([{ stage: 'New stage', amount: 0, invRef: '', invSent: '', due: '', paid: '' }])) }, '+ Add stage'),
-      h('span', { class: 'tot' }, `Stages total ${gbp(total)} ex VAT (${gbp(incVat(total))} inc VAT) · received ${gbp(paid) || '£0'} · contract ${gbp(l.quote) || '–'}${l.quote && total !== l.quote ? ' – stages don\'t add up to the contract' : ''}`)));
+    h('h3', {}, 'Project payments'),
+    sm.contract ? null : h('div', { class: 'banner' }, 'Add the contract value in "Quote £ (ex VAT)" so the stages can be calculated.'),
+    h('div', { class: 'paysum' },
+      h('div', {}, h('span', { class: 'note' }, 'Contract'), h('b', {}, gbp(sm.contract) || '–'), h('span', { class: 'note' }, gbp(incVat(sm.contract)) + ' inc VAT')),
+      h('div', {}, h('span', { class: 'note' }, 'Received'), h('b', {}, gbp(sm.received) || '£0'), h('span', { class: 'note' }, pct + '%')),
+      h('div', {}, h('span', { class: 'note' }, 'Balance remaining'), h('b', { class: 'bal' }, gbp(sm.balance) || '£0'), h('span', { class: 'note' }, gbp(incVat(sm.balance)) + ' inc VAT')),
+      h('div', {}, h('span', { class: 'note' }, 'Next'), h('b', {}, sm.next ? sm.next.stage : 'All paid'), h('span', { class: 'note' }, sm.next ? payStatus(sm.next).label : ''))),
+    h('div', { class: 'progress' }, ...pays.map((p) => h('span', { class: 'pstep ' + payStatus(p).k }, p.stage.replace(/\s*\(.*\)/, '')))),
+    ...pays.map(stageRow),
+    h('div', { class: 'quick' }, btn('+ Add stage', false, () => store(pays.concat([{ stage: 'Extra / variation', amount: 0, invRef: '', invSent: '', due: '', paid: '' }]))),
+      sm.contract && Math.abs(pays.reduce((a, p) => a + (Number(p.amount) || 0), 0) - sm.contract) > 1 ? h('span', { class: 'note' }, 'Stages don’t add up to the contract value – check the amounts.') : null));
 }
 
 /* ---------- render ---------- */
@@ -656,16 +702,17 @@ function editor(l) {
     h('dt', {}, 'Enquiry'), h('dd', {}, l.enquiry || ''),
     h('dt', {}, 'Drawing sent'), h('dd', {}, drawingCount(l) ? `${drawingCount(l)} time${drawingCount(l) > 1 ? 's' : ''}, last ${prettyDate(l.drawingSent)}${drawingCount(l) > 1 ? ' (rev ' + drawingCount(l) + ')' : ''}` : (l.drawingSent ? prettyDate(l.drawingSent) : '–')),
     h('dt', {}, 'Chases'), h('dd', { class: 'num' }, String(l.chases || 0) + (l.lastChased ? ` (last ${prettyDate(l.lastChased)})` : '')));
-  const ask = (label, fn) => { ui.confirm = { id: l.id, label, fn }; renderList(); };
+  const ask = (label, fn, opt) => { ui.confirm = { id: l.id, label, fn, dated: !!(opt && opt.date), date: todayISO() }; renderList(); };
   const quickBtn = (txt, fn, primary) => h('button', { class: 'btn' + (primary ? ' primary' : ''), type: 'button', disabled: dis, onclick: () => ask(txt, fn) }, txt);
   const pending = ui.confirm && ui.confirm.id === l.id ? ui.confirm : null;
   const confirmBar = pending ? h('div', { class: 'confirm', role: 'alertdialog', 'aria-label': 'Confirm' },
     h('span', {}, 'Log ', h('b', {}, pending.label), ' for ', h('b', {}, l.name || l.id), '?'),
-    h('button', { class: 'btn primary', type: 'button', onclick: () => { const f = pending.fn; ui.confirm = null; f(); } }, 'Confirm'),
+    pending.dated ? h('label', { class: 'cdate' }, 'Date ', h('input', { type: 'date', value: pending.date, max: todayISO(), onchange: (e) => { pending.date = e.target.value || todayISO(); } })) : null,
+    h('button', { class: 'btn primary', type: 'button', onclick: () => { const f = pending.fn, d = pending.date || todayISO(); ui.confirm = null; f(d); } }, 'Confirm'),
     h('button', { class: 'btn', type: 'button', onclick: () => { ui.confirm = null; renderList(); } }, 'Cancel')) : null;
   const form = h('div', { class: 'form' },
     confirmBar,
-    pending ? null : h('div', { class: 'quick' },
+    pending || l.status === 'Won' ? null : h('div', { class: 'quick' },
       quickBtn('Called – no answer', () => logAction(l, 'call-none')),
       quickBtn('Called – spoke', () => logAction(l, 'call-spoke')),
       quickBtn('Emailed', () => logAction(l, 'email')),
@@ -682,7 +729,7 @@ function editor(l) {
     field('Priority', sel(['High', 'Medium', 'Low'], l.priority, (e) => save(l.id, { priority: e.target.value }, { type: 'edit', field: 'priority' }), 'Priority')),
     l.status === 'Lost' ? field('Lost reason', sel(LOST, l.lostReason, (e) => save(l.id, { lostReason: e.target.value }, { type: 'edit', field: 'lostReason' }), 'Lost reason')) : h('span'),
     field('Notes', h('textarea', { disabled: dis, onchange: blurSave('notes') }, l.notes || ''), true),
-    h('ul', { class: 'hist' }, ...(l.history || []).slice().reverse().slice(0, 12).map((e) => h('li', {}, `${new Date(e.at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}${e.by ? ' (' + String(e.by).split('@')[0] + ')' : ''}: ${e.type === 'call' ? (e.outcome === 'no answer' ? 'Called, no answer' : 'Called, spoke') : e.type === 'email' ? 'Emailed' : e.type === 'drawing' ? ((e.rev || 1) > 1 ? 'Revised drawing sent (rev ' + e.rev + ')' : 'Drawing sent') : e.type === 'visit' ? 'Site visit done' : e.type === 'invoice' ? 'Invoice sent: ' + (e.stage || '') : e.type === 'paid' ? 'Payment received: ' + (e.stage || '') : e.type === 'chase' ? 'Chased' : e.type === 'status' ? `${(SBY[e.from] || {}).label || e.from || '-'} → ${(SBY[e.to] || {}).label || e.to}` : e.type === 'created' ? 'Lead added' : e.type === 'import' ? 'Imported from the lead review' : e.type === 'wix' ? 'Website form' : 'Edited ' + (e.field || '')}`))));
+    h('ul', { class: 'hist' }, ...(l.history || []).slice().reverse().slice(0, 12).map((e) => h('li', {}, `${new Date(e.at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}${e.by ? ' (' + String(e.by).split('@')[0] + ')' : ''}: ${e.type === 'call' ? (e.outcome === 'no answer' ? 'Called, no answer' : 'Called, spoke') : e.type === 'email' ? 'Emailed' : e.type === 'drawing' ? ((e.rev || 1) > 1 ? 'Revised drawing sent (rev ' + e.rev + ')' : 'Drawing sent') : e.type === 'visit' ? 'Site visit done' : e.type === 'paychase' ? 'Payment chased: ' + (e.stage || '') : e.type === 'invoice' ? 'Invoice sent: ' + (e.stage || '') + (e.date ? ' (dated ' + prettyDate(e.date) + ')' : '') : e.type === 'paid' ? 'Payment received: ' + (e.stage || '') + (e.date ? ' (on ' + prettyDate(e.date) + ')' : '') : e.type === 'chase' ? 'Chased' : e.type === 'status' ? `${(SBY[e.from] || {}).label || e.from || '-'} → ${(SBY[e.to] || {}).label || e.to}` : e.type === 'created' ? 'Lead added' : e.type === 'import' ? 'Imported from the lead review' : e.type === 'wix' ? 'Website form' : 'Edited ' + (e.field || '')}`))));
   const showPay = l.status === 'Won' || (Array.isArray(l.payments) && l.payments.length);
   return h('div', { class: 'edit' }, facts, form, showPay ? paymentsBlock(l, ask) : null);
 }

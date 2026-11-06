@@ -221,6 +221,7 @@ function esc_(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, (c) => (
 
 function kindOf_(e) {
   if (!e) return null;
+  if (e.type === 'paychase') return 'paychase';
   if (['call', 'email', 'drawing', 'chase', 'visit', 'invoice', 'paid'].indexOf(e.type) >= 0) return e.type;
   if (e.type !== 'status') return null;
   if (e.to === 'Quote sent') return 'quote';
@@ -234,9 +235,9 @@ function kindOf_(e) {
 const REPORT_COLS = [
   ['call', 'Calls'], ['noAnswer', '…no answer'], ['email', 'Emails'], ['drawing', 'Drawings'], ['revision', '…revisions'],
   ['visit', 'Site visits'], ['quote', 'Quotes sent'], ['quoteValue', 'Quoted £'], ['chase', 'Chases'],
-  ['won', 'New clients (won)'], ['wonValue', 'Won £'], ['lost', 'Lost'], ['invoice', 'Invoices sent'], ['paidValue', 'Payments in £']
+  ['won', 'New clients (won)'], ['wonValue', 'Won £'], ['lost', 'Lost'], ['invoice', 'Invoices sent'], ['paychase', 'Payment chases'], ['paidValue', 'Payments in £']
 ];
-const LABEL = { call: 'Call', email: 'Email', drawing: 'Drawing sent', chase: 'Chased', visit: 'Site visit', quote: 'Quote sent', won: 'WON', lost: 'Lost', invoice: 'Invoice sent', paid: 'Payment received' };
+const LABEL = { call: 'Call', email: 'Email', drawing: 'Drawing sent', chase: 'Chased', visit: 'Site visit', quote: 'Quote sent', won: 'WON', lost: 'Lost', invoice: 'Invoice sent', paid: 'Payment received', paychase: 'Payment chased' };
 
 function buildReport_(from, to, title) {
   const leads = getBoard().leads;
@@ -285,7 +286,7 @@ function buildReport_(from, to, title) {
       if (it.k === 'call') what += (it.e.outcome === 'no answer' || it.e.to === 'Phoned - no answer') ? ' (no answer)' : ' (spoke)';
       if (it.k === 'drawing' && (it.e.rev || 1) > 1) what += ' (rev ' + it.e.rev + ')';
       if ((it.k === 'quote' || it.k === 'won') && it.l.quote) what += ' ' + gbp_(it.l.quote);
-      if ((it.k === 'invoice' || it.k === 'paid') && it.e.amount) what += ': ' + esc_(it.e.stage || '') + ' ' + gbp_(it.e.amount);
+      if ((it.k === 'invoice' || it.k === 'paid' || it.k === 'paychase') && (it.e.stage || it.e.amount)) what += ': ' + esc_(it.e.stage || '') + ' ' + gbp_(it.e.amount);
       html += '<tr><td style="padding:4px 8px;color:#5f676e;white-space:nowrap">' + t + '</td><td style="padding:4px 8px">' + esc_(it.w) + '</td><td style="padding:4px 8px"><b>' + what + '</b></td><td style="padding:4px 8px">' + esc_(it.l.id + ' ' + (it.l.name || '')) + '</td></tr>';
     });
     html += '</table>';
