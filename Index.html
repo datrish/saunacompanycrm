@@ -144,6 +144,7 @@ table.team th, table.team td { padding: 7px 10px; border-bottom: 1px solid var(-
 table.team th:first-child, table.team td:first-child { text-align: left; }
 table.team thead th { font-weight: 600; color: var(--muted); font-size: 12px; }
 table.team tr.total td { font-weight: 700; border-bottom: 0; }
+#period-date { font: inherit; font-size: 13px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); }
 #period { font: inherit; font-size: 13px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); }
 *, *::before, *::after { box-sizing: border-box; }
 </style>
@@ -184,12 +185,16 @@ table.team tr.total td { font-weight: 700; border-bottom: 0; }
   <section class="card">
     <div class="card-head"><h2>Team activity</h2>
       <select id="period" aria-label="Period">
-        <option value="week">This week</option>
+        <option value="today">Today</option>
+        <option value="yesterday">Yesterday</option>
+        <option value="date">Pick a date…</option>
+        <option value="week" selected>This week</option>
         <option value="lastweek">Last week</option>
         <option value="month">This month</option>
         <option value="30">Last 30 days</option>
         <option value="all">Since the board started</option>
       </select>
+      <input type="date" id="period-date" aria-label="Date" hidden>
     </div>
     <div class="tablewrap"><table class="team" id="team"></table></div>
     <p class="note">Counts every button tapped on the board, and who tapped it. Work done before the board started (5 Nov 2026) isn't counted.</p>
@@ -346,6 +351,9 @@ function periodRange(p) {
   const t = todayISO();
   const d = new Date(t + 'T12:00:00');
   const mon = addDays(t, -((d.getDay() + 6) % 7));
+  if (p === 'today') return [t, t];
+  if (p === 'yesterday') return [addDays(t, -1), addDays(t, -1)];
+  if (p === 'date') { const v = document.getElementById('period-date').value || t; return [v, v]; }
   if (p === 'week') return [mon, t];
   if (p === 'lastweek') return [addDays(mon, -7), addDays(mon, -1)];
   if (p === 'month') return [t.slice(0, 8) + '01', t];
@@ -596,7 +604,13 @@ document.getElementById('add-form').addEventListener('submit', async (e) => {
 /* ---------- controls ---------- */
 document.getElementById('q').addEventListener('input', (e) => { ui.q = e.target.value.trim(); if (ui.q && ui.status === 'open') ui.status = 'all'; renderList(); renderStrip(); });
 document.getElementById('src').addEventListener('change', (e) => { ui.src = e.target.value; renderList(); });
-document.getElementById('period').addEventListener('change', () => loaded && renderTeam());
+document.getElementById('period').addEventListener('change', (e) => {
+  const di = document.getElementById('period-date');
+  di.hidden = e.target.value !== 'date';
+  if (!di.hidden && !di.value) di.value = todayISO();
+  if (loaded) renderTeam();
+});
+document.getElementById('period-date').addEventListener('change', () => loaded && renderTeam());
 document.getElementById('sort').addEventListener('change', (e) => { ui.sort = e.target.value; renderList(); });
 let rz; window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => loaded && renderChart(), 150); });
 
