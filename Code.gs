@@ -122,7 +122,7 @@ function updateLead(id, patch, action) {
       if (k === 'status' && !STATUSES.includes(v)) throw new Error('Unknown status ' + v);
       row[map[k]] = writeValue_(k, v);
     }
-    if (action && ['status', 'chase', 'call', 'email', 'drawing'].includes(action.type) && map.lastContact != null) row[map.lastContact] = today;
+    if (action && ['status', 'chase', 'call', 'email', 'drawing', 'visit'].includes(action.type) && map.lastContact != null) row[map.lastContact] = today;
     if (map.history != null) {
       let hist = [];
       try { hist = row[map.history] ? JSON.parse(row[map.history]) : []; } catch (e) { hist = []; }
@@ -205,4 +205,118 @@ function setup() {
   // 5. keep the long History column narrow
   sh.setColumnWidth(map.history + 1, 120);
   SpreadsheetApp.getActive().toast('Lead board setup done. Now Deploy > New deployment > Web app.');
+}
+
+/* ---------------- daily & weekly email reports ---------------- */
+
+const REPORT_TO = 'datrish@gmail.com';
+const BOARD_URL = 'https://saunaleads.vercel.app';
+const PEOPLE = { 'datrish@gmail.com': 'Deepti', 'hemantatrish@gmail.com': 'Hemant', 'spaziolondondesigners@gmail.com': 'Kiana' };
+
+function day_(d) { return Utilities.formatDate(d instanceof Date ? d : new Date(d), TZ, 'yyyy-MM-dd'); }
+function addDays_(ymd, n) { const d = new Date(ymd + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return day_(d); }
+function who_(by) { if (!by) return 'Automatic'; const k = String(by).toLowerCase(); return PEOPLE[k] || (k.indexOf('@') > 0 ? k.split('@')[0] : String(by)); }
+function gbp_(v) { return '£' + Math.round(v || 0).toLocaleString('en-GB'); }
+function esc_(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+function kindOf_(e) {
+  if (!e) return null;
+  if (['call', 'email', 'drawing', 'chase', 'visit', 'invoice', 'paid'].indexOf(e.type) >= 0) return e.type;
+  if (e.type !== 'status') return null;
+  if (e.to === 'Quote sent') return 'quote';
+  if (e.to === 'Won') return 'won';
+  if (e.to === 'Lost') return 'lost';
+  if (e.to === 'Phoned - no answer') return 'call';
+  if (e.to === 'Replied - no quote') return 'email';
+  return null;
+}
+
+const REPORT_COLS = [
+  ['call', 'Calls'], ['noAnswer', '…no answer'], ['email', 'Emails'], ['drawing', 'Drawings'], ['revision', '…revisions'],
+  ['visit', 'Site visits'], ['quote', 'Quotes sent'], ['quoteValue', 'Quoted £'], ['chase', 'Chases'],
+  ['won', 'New clients (won)'], ['wonValue', 'Won £'], ['lost', 'Lost'], ['invoice', 'Invoices sent'], ['paidValue', 'Payments in £']
+];
+const LABEL = { call: 'Call', email: 'Email', drawing: 'Drawing sent', chase: 'Chased', visit: 'Site visit', quote: 'Quote sent', won: 'WON', lost: 'Lost', invoice: 'Invoice sent', paid: 'Payment received' };
+
+function buildReport_(from, to, title) {
+  const leads = getBoard().leads;
+  const blank = () => { const o = {}; REPORT_COLS.forEach(([k]) => { o[k] = 0; }); o.paid = 0; return o; };
+  const people = {}; const items = [];
+  leads.forEach((l) => (l.history || []).forEach((e) => {
+    const k = kindOf_(e); if (!k || !e.at) return;
+    const d = day_(e.at); if (d < from || d > to) return;
+    const w = who_(e.by); const p = people[w] = people[w] || blank();
+    p[k]++;
+    if (k === 'call' && (e.outcome === 'no answer' || e.to === 'Phoned - no answer')) p.noAnswer++;
+    if (k === 'drawing' && (e.rev || 1) > 1) p.revision++;
+    if (k === 'quote') p.quoteValue += l.quote || 0;
+    if (k === 'won') p.wonValue += l.quote || 0;
+    if (k === 'paid') p.paidValue += Number(e.amount) || 0;
+    items.push({ at: e.at, w, k, l, e });
+  }));
+  const newLeads = leads.filter((l) => l.date >= from && l.date <= to);
+  const bySource = {}; newLeads.forEach((l) => { bySource[l.source || 'Other'] = (bySource[l.source || 'Other'] || 0) + 1; });
+  const open = ['New', 'Phoned - no answer', 'Replied - no quote', 'Quote sent', 'Chased'];
+  const notContacted = leads.filter((l) => l.status === 'New');
+  const dueTomorrow = leads.filter((l) => open.indexOf(l.status) >= 0 && l.nextFollowUp && l.nextFollowUp <= addDays_(to, 1));
+  const names = Object.keys(people).sort();
+
+  const th = 'style="text-align:right;padding:6px 8px;border-bottom:1px solid #ddd;font-size:12px;color:#555"';
+  const td = 'style="text-align:right;padding:6px 8px;border-bottom:1px solid #eee"';
+  const cell = (k, v) => (k === 'quoteValue' || k === 'wonValue' || k === 'paidValue') ? (v ? gbp_(v) : '–') : (v || '–');
+  let html = '<div style="font-family:Arial,sans-serif;font-size:14px;color:#1d2328;max-width:900px">';
+  html += '<h2 style="margin:0 0 4px">' + esc_(title) + '</h2>';
+  html += '<p style="margin:0 0 14px;color:#5f676e">' + (from === to ? from : from + ' to ' + to) + ' · <a href="' + BOARD_URL + '">Open the board</a></p>';
+  html += '<p><b>New enquiries:</b> ' + newLeads.length + (newLeads.length ? ' (' + Object.keys(bySource).map((s) => esc_(s) + ' ' + bySource[s]).join(', ') + ')' : '') + '</p>';
+  if (names.length) {
+    html += '<table style="border-collapse:collapse;font-size:13px"><tr><th style="text-align:left;padding:6px 8px;border-bottom:1px solid #ddd;font-size:12px;color:#555">Who</th>' + REPORT_COLS.map(([, lbl]) => '<th ' + th + '>' + lbl + '</th>').join('') + '</tr>';
+    names.forEach((n) => { html += '<tr><td style="padding:6px 8px;border-bottom:1px solid #eee"><b>' + esc_(n) + '</b></td>' + REPORT_COLS.map(([k]) => '<td ' + td + '>' + cell(k, people[n][k]) + '</td>').join('') + '</tr>'; });
+    html += '</table>';
+  } else {
+    html += '<p style="padding:10px;background:#fbe4e1;border-radius:6px"><b>Nothing was logged on the board in this period.</b></p>';
+  }
+  html += '<p style="margin-top:16px"><b>Still waiting:</b> ' + notContacted.length + ' new leads not contacted yet · ' + dueTomorrow.length + ' follow-ups due by tomorrow.</p>';
+  if (items.length) {
+    items.sort((a, b) => String(a.at).localeCompare(String(b.at)));
+    html += '<h3 style="margin:18px 0 6px">What was done</h3><table style="border-collapse:collapse;font-size:13px">';
+    items.slice(-150).forEach((it) => {
+      const t = Utilities.formatDate(new Date(it.at), TZ, from === to ? 'HH:mm' : 'EEE d MMM HH:mm');
+      let what = LABEL[it.k] || it.k;
+      if (it.k === 'call') what += (it.e.outcome === 'no answer' || it.e.to === 'Phoned - no answer') ? ' (no answer)' : ' (spoke)';
+      if (it.k === 'drawing' && (it.e.rev || 1) > 1) what += ' (rev ' + it.e.rev + ')';
+      if ((it.k === 'quote' || it.k === 'won') && it.l.quote) what += ' ' + gbp_(it.l.quote);
+      if ((it.k === 'invoice' || it.k === 'paid') && it.e.amount) what += ': ' + esc_(it.e.stage || '') + ' ' + gbp_(it.e.amount);
+      html += '<tr><td style="padding:4px 8px;color:#5f676e;white-space:nowrap">' + t + '</td><td style="padding:4px 8px">' + esc_(it.w) + '</td><td style="padding:4px 8px"><b>' + what + '</b></td><td style="padding:4px 8px">' + esc_(it.l.id + ' ' + (it.l.name || '')) + '</td></tr>';
+    });
+    html += '</table>';
+  }
+  html += '<p style="margin-top:18px;color:#8a8f94;font-size:12px">Sent automatically by the Sauna Leads Board. Counts only what was tapped on the board.</p></div>';
+  return { html, total: items.length };
+}
+
+/** Weekdays at ~18:30 London: today's activity. */
+function sendDailyReport() {
+  const today = day_(new Date());
+  const dow = Number(Utilities.formatDate(new Date(), TZ, 'u')); // 1 = Mon … 7 = Sun
+  if (dow >= 6) return;
+  const r = buildReport_(today, today, 'Sauna leads – daily report');
+  MailApp.sendEmail({ to: REPORT_TO, subject: 'Sauna leads – daily report ' + Utilities.formatDate(new Date(), TZ, 'EEE d MMM') + ' (' + r.total + ' actions)', htmlBody: r.html, name: 'Sauna Leads Board' });
+}
+
+/** Fridays ~19:00 London: Monday to today. */
+function sendWeeklyReport() {
+  const today = day_(new Date());
+  const dow = Number(Utilities.formatDate(new Date(), TZ, 'u'));
+  const monday = addDays_(today, -(dow - 1));
+  const r = buildReport_(monday, today, 'Sauna leads – weekly report');
+  MailApp.sendEmail({ to: REPORT_TO, subject: 'Sauna leads – weekly report w/c ' + monday + ' (' + r.total + ' actions)', htmlBody: r.html, name: 'Sauna Leads Board' });
+}
+
+/** Run once from the editor to switch the reports on. */
+function installReportTriggers() {
+  ScriptApp.getProjectTriggers().forEach((t) => {
+    if (['sendDailyReport', 'sendWeeklyReport'].indexOf(t.getHandlerFunction()) >= 0) ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('sendDailyReport').timeBased().everyDays(1).atHour(18).nearMinute(30).inTimezone(TZ).create();
+  ScriptApp.newTrigger('sendWeeklyReport').timeBased().onWeekDay(ScriptApp.WeekDay.FRIDAY).atHour(19).inTimezone(TZ).create();
 }
