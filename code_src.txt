@@ -22,6 +22,7 @@ const DATE_FIELDS = ['date', 'lastContact', 'nextFollowUp', 'lastChased', 'drawi
 const EDITABLE = ['name', 'email', 'phone', 'postcode', 'enquiry', 'source', 'status', 'quote', 'priority', 'owner',
   'nextFollowUp', 'lostReason', 'notes', 'chases', 'lastChased', 'lastContact', 'drawingSent', 'payments'];
 const STATUSES = ['New', 'Phoned - no answer', 'Replied - no quote', 'Quote sent', 'Chased', 'Won', 'Lost'];
+const LOST_REASONS = ['Quote too high', 'Not going ahead', 'Postponed', 'Went with someone else', 'We were too slow', 'No response', 'Not a fit', 'Other'];
 const OLD_STATUS = { 'Not contacted': 'New', 'Contacted - no quote': 'Replied - no quote' };
 const STATUS_COLOURS = {
   'New': '#F19C9C', 'Phoned - no answer': '#F8C9B5', 'Replied - no quote': '#FCE3A6', 'Quote sent': '#CFE2F3',
@@ -131,10 +132,51 @@ function updateLead(id, patch, action) {
     }
     if (map.lastActivity != null) row[map.lastActivity] = now.toISOString();
     sh.getRange(r, 1, 1, width).setValues([row]);
-    return rowToLead_(sh.getRange(r, 1, 1, width).getValues()[0], map);
+    const out = rowToLead_(sh.getRange(r, 1, 1, width).getValues()[0], map);
+    if (patch && ('payments' in patch || 'status' in patch || 'quote' in patch)) {
+      try { refreshPaymentsTab(); } catch (e) { console.warn('Payments tab not refreshed: ' + e.message); }
+    }
+    return out;
   } finally {
     lock.releaseLock();
   }
+}
+
+/* ---------------- Payments tab (a readable copy of every payment stage) ---------------- */
+
+/** Rebuilds the "Payments" tab from the board. Runs by itself after every payment change; can also be run from the editor. */
+function refreshPaymentsTab() {
+  const ss = SpreadsheetApp.getActive();
+  const leads = getBoard().leads.filter((l) => l.status === 'Won' || (Array.isArray(l.payments) && l.payments.length));
+  const today = Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd');
+  const head = ['Lead ID', 'Client', 'Status', 'Stage', 'Amount £ (ex VAT)', 'Amount £ (inc VAT)', 'Invoice ref', 'Invoice sent', 'Due', 'Payment received', 'Payment status', 'Days late', 'Times chased', 'Last chased'];
+  const rows = [];
+  leads.forEach((l) => {
+    const pays = Array.isArray(l.payments) && l.payments.length ? l.payments : defaultStages_(l.quote || 0);
+    pays.forEach((p) => {
+      const amt = Number(p.amount) || 0;
+      const late = p.invSent && !p.paid && p.due && p.due < today ? Math.round((new Date(today) - new Date(p.due)) / 864e5) : '';
+      const st = p.paid ? 'Paid' : p.invSent ? (late ? 'Late' : 'Invoiced, awaiting payment') : 'Not invoiced yet';
+      rows.push([l.id, l.name || '', l.status, p.stage || '', amt, Math.round(amt * 1.2), p.invRef || '', p.invSent || '', p.due || '', p.paid || '', st, late, p.chased || '', p.lastChased || '']);
+    });
+  });
+  const order = { 'Late': 0, 'Invoiced, awaiting payment': 1, 'Not invoiced yet': 2, 'Paid': 3 };
+  rows.sort((a, b) => order[a[10]] - order[b[10]] || String(a[8] || '9').localeCompare(String(b[8] || '9')));
+  let sh = ss.getSheetByName('Payments');
+  if (!sh) { sh = ss.insertSheet('Payments', 1); sh.setFrozenRows(1); }
+  sh.clearContents();
+  sh.getRange(1, 1, 1, head.length).setValues([head]).setFontWeight('bold');
+  if (rows.length) {
+    sh.getRange(2, 1, rows.length, head.length).setValues(rows);
+    sh.getRange(2, 5, rows.length, 2).setNumberFormat('£#,##0');
+  }
+  const note = rows.length + 2;
+  sh.getRange(note, 1).setValue('Updated automatically from the board (' + Utilities.formatDate(new Date(), TZ, 'd MMM yyyy HH:mm') + '). Log invoices and payments on the board, not here.').setFontStyle('italic');
+}
+function defaultStages_(q) {
+  const plan = [['Advance 25% (on order)', 0.25], ['40% – frame completed', 0.40], ['30% – after cladding', 0.30], ['Final 5% (handover)', 0.05]];
+  let left = q;
+  return plan.map(([stage, pct], i) => { const amount = i === plan.length - 1 ? left : Math.round(q * pct); left -= amount; return { stage, amount }; });
 }
 
 /** Add a lead from the page (phone calls, info@ emails). Inserted at the top (newest first). */
@@ -204,6 +246,11 @@ function setup() {
   sh.setConditionalFormatRules(rules);
   // 5. keep the long History column narrow
   sh.setColumnWidth(map.history + 1, 120);
+  // 6. Lost reason drop-down
+  sh.getRange(2, map.lostReason + 1, sh.getMaxRows() - 1, 1).setDataValidation(
+    SpreadsheetApp.newDataValidation().requireValueInList(LOST_REASONS, true).setAllowInvalid(true).build());
+  // 7. readable Payments tab
+  refreshPaymentsTab();
   SpreadsheetApp.getActive().toast('Lead board setup done. Now Deploy > New deployment > Web app.');
 }
 
