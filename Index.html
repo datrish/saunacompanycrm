@@ -149,6 +149,8 @@ body { margin: 0; }
 .ps.paid { background: var(--s-won-bg); } .ps.inv { background: var(--s-quote-bg); } .ps.over { background: var(--s-new-bg); color: var(--s-new); font-weight: 600; } .ps.none { background: var(--soft); color: var(--muted); }
 .paystrip { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); gap: 8px; }
 .paystrip .stat { cursor: default; }
+.subh { font-size: 14px; margin: 18px 0 6px; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; } .subh .note { font-weight: 400; }
+.late { color: var(--s-new); font-weight: 600; }
 .paysum { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
 .paysum > div { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; background: var(--soft); border-radius: 8px; }
 .paysum b { font-family: var(--display); font-size: 18px; }
@@ -216,8 +218,13 @@ table.team tr.total td { font-weight: 700; border-bottom: 0; }
   <section class="card" id="pay-card">
     <div class="card-head"><h2>Won clients &amp; payments</h2><span class="note">Amounts ex VAT, inc VAT underneath</span></div>
     <div class="paystrip" id="paystrip"></div>
+    <h3 class="subh">Payments pending &amp; expected <span class="note">invoices sent, not yet paid · late first</span></h3>
+    <div class="tablewrap"><table class="team" id="paypending"></table></div>
+    <h3 class="subh">Payments received <span class="note">last 60 days</span></h3>
+    <div class="tablewrap"><table class="team" id="payreceived"></table></div>
+    <h3 class="subh">By client</h3>
     <div class="tablewrap"><table class="team" id="paylist"></table></div>
-    <p class="note">Stages (25% advance, 40% frame, 30% cladding, 5% final) are created when a lead is marked Won. Open a client and tap Invoice sent, then Paid.</p>
+    <p class="note">Stages (25% advance, 40% frame, 30% cladding, 5% final) are created when a lead is marked Won. Open a client, tap Invoice sent (pick the date), then Payment received (pick the date). Due date defaults to 7 days after the invoice and can be changed under Edit.</p>
   </section>
 
   <section class="card">
@@ -481,11 +488,42 @@ function renderPayments() {
   const overdueSum = rows.reduce((a, r) => a + r.overdue.reduce((x, p) => x + (Number(p.amount) || 0), 0), 0);
   const paidMonth = rows.reduce((a, r) => a + r.pays.filter((p) => p.paid && p.paid >= monthStart).reduce((x, p) => x + (Number(p.amount) || 0), 0), 0);
   const tile = (label, v, c, sub) => h('div', { class: 'stat' }, h('span', { class: 'lbl' }, h('i', { class: 'dot', style: `--c: var(${c})` }), label), h('span', { class: 'big' }, gbpShort(v)), h('span', { class: 'sub' }, sub || `${gbpShort(incVat(v))} inc VAT`));
+  const open = (l) => () => { ui.status = 'all'; ui.q = l.id; document.getElementById('q').value = l.id; ui.open = l.id; render(); document.getElementById('list').scrollIntoView({ behavior: 'smooth' }); };
+  const today = todayISO();
+  const days = (a, b) => Math.round((new Date(b + 'T12:00:00') - new Date(a + 'T12:00:00')) / 864e5);
+  const flat = rows.flatMap((r) => r.pays.map((p) => ({ l: r.l, p, amt: Number(p.amount) || 0 })));
+  const pending = flat.filter((x) => x.p.invSent && !x.p.paid).sort((a, b) => String(a.p.due || '9').localeCompare(String(b.p.due || '9')));
+  const late = pending.filter((x) => x.p.due && x.p.due < today);
+  const expected = pending.filter((x) => !(x.p.due && x.p.due < today));
+  const sumA = (arr) => arr.reduce((a, x) => a + x.amt, 0);
+  const since = addDays(today, -60);
+  const received = flat.filter((x) => x.p.paid && x.p.paid >= since).sort((a, b) => b.p.paid.localeCompare(a.p.paid));
+  const nextDue = expected.find((x) => x.p.due);
+  const oldest = late.length ? Math.max(...late.map((x) => days(x.p.due, today))) : 0;
   document.getElementById('paystrip').replaceChildren(
-    tile('Balance to collect', sumOf('balance'), '--timber', `${won.length} won client${won.length === 1 ? '' : 's'} · ${gbpShort(incVat(sumOf('balance')))} inc VAT`),
-    tile('Invoiced, awaiting payment', sumOf('awaiting'), '--s-quote'),
-    tile('Overdue', overdueSum, '--s-new'),
-    tile('Received this month', paidMonth, '--s-won'));
+    tile('Payments expected', sumA(expected), '--s-quote', expected.length ? `${expected.length} invoice${expected.length === 1 ? '' : 's'}${nextDue ? ' · next due ' + prettyDate(nextDue.p.due) : ''}` : 'Nothing invoiced and waiting'),
+    tile('Payments late', overdueSum, '--s-new', late.length ? `${late.length} past due · oldest ${oldest} day${oldest === 1 ? '' : 's'} late` : 'Nothing late'),
+    tile('Received this month', paidMonth, '--s-won', `${gbpShort(sumOf('received'))} received in total`),
+    tile('Balance to collect', sumOf('balance'), '--timber', `${won.length} won client${won.length === 1 ? '' : 's'} · ${gbpShort(incVat(sumOf('balance')))} inc VAT`));
+  const cl = (l) => h('button', { type: 'button', class: 'linkbtn', onclick: open(l) }, l.name || l.id);
+  const statusOf = (p) => {
+    if (!p.due) return h('span', { class: 'ps inv' }, 'Expected – no due date');
+    const d = days(today, p.due);
+    if (d < 0) return h('span', { class: 'ps over' }, `${-d} day${d === -1 ? '' : 's'} late`);
+    return h('span', { class: 'ps inv' }, d === 0 ? 'Due today' : `Due in ${d} day${d === 1 ? '' : 's'}`);
+  };
+  document.getElementById('paypending').replaceChildren(
+    h('thead', {}, h('tr', {}, ...['Client', 'Stage', 'Amount', 'Invoice sent', 'Due', 'Status', 'Chased'].map((x) => h('th', {}, x)))),
+    h('tbody', {}, ...(pending.length ? late.concat(expected).map((x) => h('tr', {},
+      h('td', {}, cl(x.l)), h('td', {}, x.p.stage), h('td', {}, h('b', {}, gbp(x.amt))),
+      h('td', {}, prettyDate(x.p.invSent)), h('td', {}, x.p.due ? prettyDate(x.p.due) : '–'), h('td', {}, statusOf(x.p)),
+      h('td', {}, x.p.chased ? `${x.p.chased}× (last ${prettyDate(x.p.lastChased)})` : '–'))) : [h('tr', {}, h('td', { colspan: '7', class: 'empty' }, 'No invoices waiting for payment.'))])));
+  document.getElementById('payreceived').replaceChildren(
+    h('thead', {}, h('tr', {}, ...['Client', 'Stage', 'Amount', 'Invoice sent', 'Received on', 'Took'].map((x) => h('th', {}, x)))),
+    h('tbody', {}, ...(received.length ? received.map((x) => h('tr', {},
+      h('td', {}, cl(x.l)), h('td', {}, x.p.stage), h('td', {}, h('b', {}, gbp(x.amt))),
+      h('td', {}, x.p.invSent ? prettyDate(x.p.invSent) : '–'), h('td', {}, prettyDate(x.p.paid)),
+      h('td', {}, x.p.invSent ? (() => { const n = days(x.p.invSent, x.p.paid); return h('span', { class: x.p.due && x.p.paid > x.p.due ? 'late' : '' }, `${n} day${n === 1 ? '' : 's'}`); })() : '–'))) : [h('tr', {}, h('td', { colspan: '6', class: 'empty' }, 'No payments received in the last 60 days.'))])));
   const rank = (r) => (r.overdue.length ? 0 : r.awaiting ? 1 : r.balance > 0 ? 2 : 3);
   rows.sort((a, b) => rank(a) - rank(b) || b.balance - a.balance);
   const nextText = (r) => {
@@ -493,7 +531,6 @@ function renderPayments() {
     const st = payStatus(r.next);
     return h('span', {}, h('span', { class: 'ps ' + st.k }, st.k === 'none' ? 'To invoice' : st.label), ' ', r.next.stage, ' ', gbp(r.next.amount));
   };
-  const open = (l) => () => { ui.status = 'all'; ui.q = l.id; document.getElementById('q').value = l.id; ui.open = l.id; render(); document.getElementById('list').scrollIntoView({ behavior: 'smooth' }); };
   document.getElementById('paylist').replaceChildren(
     h('thead', {}, h('tr', {}, ...['Client', 'Contract', 'Received', 'Balance', 'Next payment'].map((x) => h('th', {}, x)))),
     h('tbody', {}, ...(rows.length ? rows.map((r) => h('tr', {},
