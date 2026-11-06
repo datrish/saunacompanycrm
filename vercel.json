@@ -1,5 +1,0 @@
-{
-  "headers": [
-    { "source": "/(.*)", "headers": [ { "key": "Access-Control-Allow-Origin", "value": "https://script.google.com" }, { "key": "Cache-Control", "value": "no-store" } ] }
-  ]
-}
